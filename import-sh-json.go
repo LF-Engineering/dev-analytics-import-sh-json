@@ -2,13 +2,20 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"os"
 	"runtime/debug"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 )
+
+// shData - Bitergia's identities export data format
+type shData struct {
+	UIdentities interface{} `json:"uidentities"`
+}
 
 func fatalOnError(err error) {
 	if err != nil {
@@ -24,6 +31,14 @@ func fatalf(f string, a ...interface{}) {
 }
 
 func importJSONfiles(db *sql.DB, fileNames []string) error {
+	nFiles := len(fileNames)
+	for i, fileName := range fileNames {
+		fmt.Printf("Importing %d/%d: %s\n", i+1, nFiles, fileName)
+		var data shData
+		contents, err := ioutil.ReadFile(fileName)
+		fatalOnError(err)
+		fatalOnError(json.Unmarshal(contents, &data))
+	}
 	return nil
 }
 
@@ -90,7 +105,7 @@ func main() {
 	db, err := sql.Open("mysql", dsn)
 	fatalOnError(err)
 	defer func() { fatalOnError(db.Close()) }()
-	fatalOnError(importJSONfiles(db, os.Args))
+	fatalOnError(importJSONfiles(db, os.Args[1:len(os.Args)]))
 	dtEnd := time.Now()
 	fmt.Printf("Time(%s): %v\n", os.Args[0], dtEnd.Sub(dtStart))
 }
