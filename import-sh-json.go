@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"reflect"
 	"runtime"
 	"runtime/debug"
 	"strconv"
@@ -116,12 +117,50 @@ func (sht *shTime) UnmarshalJSON(b []byte) (err error) {
 	return
 }
 
+func queryOut(query string, args ...interface{}) {
+	fmt.Printf("%s\n", query)
+	if len(args) > 0 {
+		s := ""
+		for vi, vv := range args {
+			switch v := vv.(type) {
+			case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64, complex64, complex128, string, bool, time.Time:
+				s += fmt.Sprintf("%d:%+v ", vi+1, v)
+			case *int, *int8, *int16, *int32, *int64, *uint, *uint8, *uint16, *uint32, *uint64, *float32, *float64, *complex64, *complex128, *string, *bool, *time.Time:
+				s += fmt.Sprintf("%d:%+v ", vi+1, v)
+			case nil:
+				s += fmt.Sprintf("%d:(null) ", vi+1)
+			default:
+				s += fmt.Sprintf("%d:%+v ", vi+1, reflect.ValueOf(vv).Elem())
+			}
+		}
+		fmt.Printf("[%s]\n", s)
+	}
+}
+
+func query(db *sql.DB, query string, args ...interface{}) (*sql.Rows, error) {
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		queryOut(query, args...)
+	}
+	return rows, err
+}
+
+func exec(db *sql.DB, skip, query string, args ...interface{}) (sql.Result, error) {
+	res, err := db.Exec(query, args...)
+	if err != nil {
+		if skip == "" || !strings.Contains(err.Error(), skip) {
+			queryOut(query, args...)
+		}
+	}
+	return res, err
+}
+
 func addOrganization(db *sql.DB, company string) (int, bool) {
-	_, err := db.Exec("insert into organizations(name) values(?)", stripUnicodeStr(company))
+	_, err := exec(db, "Error 1062", "insert into organizations(name) values(?)", stripUnicodeStr(company))
 	exists := false
 	if err != nil {
 		if strings.Contains(err.Error(), "Error 1062") {
-			rows, err2 := db.Query("select name from organizations where name = ?", company)
+			rows, err2 := query(db, "select name from organizations where name = ?", company)
 			fatalOnError(err2)
 			var existingName string
 			for rows.Next() {
@@ -134,7 +173,7 @@ func addOrganization(db *sql.DB, company string) (int, bool) {
 			fatalOnError(err)
 		}
 	}
-	rows, err := db.Query("select id from organizations where name = ?", company)
+	rows, err := query(db, "select id from organizations where name = ?", company)
 	fatalOnError(err)
 	var id int
 	fetched := false
@@ -151,7 +190,9 @@ func addOrganization(db *sql.DB, company string) (int, bool) {
 }
 
 func addCountry(db *sql.DB, country *shCountry) (exists bool) {
-	_, err := db.Exec(
+	_, err := exec(
+		db,
+		"Error 1062",
 		"insert into countries(code, alpha3, name) values(?,?,?)",
 		country.Code,
 		country.Alpha3,
@@ -216,6 +257,38 @@ func stripUnicodeStr(str string) string {
 	return str
 }
 
+func cleanUTF8(str string) string {
+	if strings.Contains(str, "\x00") {
+		return strings.Replace(str, "\x00", "", -1)
+	}
+	return str
+}
+
+func truncToBytes(str string, size int) string {
+	str = cleanUTF8(str)
+	length := len(str)
+	if length < size {
+		return str
+	}
+	res := ""
+	i := 0
+	for _, r := range str {
+		if len(res+string(r)) > size {
+			break
+		}
+		res += string(r)
+		i++
+	}
+	return res
+}
+
+func truncStringOrNil(strPtr *string, maxLen int) interface{} {
+	if strPtr == nil {
+		return nil
+	}
+	return truncToBytes(*strPtr, maxLen)
+}
+
 func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity shUIdentity, comp2id map[string]int, replace bool, stats *importStats) {
 	defer func() {
 		if ch != nil {
@@ -223,7 +296,7 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 		}
 	}()
 	var sts importStats
-	rows, err := db.Query("select uuid from uidentities where uuid = ?", uidentity.UUID)
+	rows, err := query(db, "select uuid from uidentities where uuid = ?", uidentity.UUID)
 	fatalOnError(err)
 	uuid := uidentity.UUID
 	fetched := false
@@ -234,7 +307,9 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 	fatalOnError(rows.Err())
 	fatalOnError(rows.Close())
 	if !fetched {
-		_, err := db.Exec(
+		_, err := exec(
+			db,
+			"",
 			"insert into uidentities(uuid, last_modified) values(?,now())",
 			uidentity.UUID,
 		)
@@ -243,7 +318,8 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 	} else {
 		sts.uidentitiesFound++
 	}
-	rows, err = db.Query(
+	rows, err = query(
+		db,
 		"select uuid from profiles where uuid = ?",
 		uidentity.UUID,
 	)
@@ -259,7 +335,7 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 		fatalOnError(err)
 		sts.profilesFound++
 		if replace {
-			_, err := db.Exec("delete from profiles where uuid = ?", uidentity.UUID)
+			_, err := exec(db, "", "delete from profiles where uuid = ?", uidentity.UUID)
 			fatalOnError(err)
 			sts.profilesDeleted++
 		}
@@ -267,9 +343,11 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 	if !fetched || (fetched && replace) {
 		var cCode *string
 		if uidentity.Profile.Country != nil {
-			cCode = &uidentity.Profile.Country.Name
+			cCode = &uidentity.Profile.Country.Code
 		}
-		_, err := db.Exec(
+		_, err := exec(
+			db,
+			"",
 			"insert into profiles(uuid, name, email, gender, gender_acc, is_bot, country_code) values(?,?,?,?,?,?,?)",
 			uidentity.UUID,
 			stripUnicode(uidentity.Profile.Name),
@@ -277,13 +355,14 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 			uidentity.Profile.Gender,
 			uidentity.Profile.GenderAcc,
 			uidentity.Profile.IsBot,
-			cCode,
+			truncStringOrNil(cCode, 2),
 		)
 		fatalOnError(err)
 		sts.profilesAdded++
 	}
 	for _, identity := range uidentity.Identities {
-		rows, err = db.Query(
+		rows, err = query(
+			db,
 			"select uuid from identities where id = ? or (name = ? and email = ? and username = ? and source = ?)",
 			identity.ID,
 			stripUnicode(identity.Name),
@@ -303,13 +382,24 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 			fatalOnError(err)
 			sts.identitiesFound++
 			if replace {
-				_, err := db.Exec("delete from identities where id = ?", identity.ID)
+				_, err := exec(
+					db,
+					"",
+					"delete from identities where id = ? or (name = ? and email = ? and username = ? and source = ?)",
+					identity.ID,
+					stripUnicode(identity.Name),
+					stripUnicode(identity.Email),
+					stripUnicode(identity.Username),
+					identity.Source,
+				)
 				fatalOnError(err)
 				sts.identitiesDeleted++
 			}
 		}
 		if !fetched || (fetched && replace) {
-			_, err := db.Exec(
+			_, err := exec(
+				db,
+				"",
 				"insert into identities(uuid, id, source, name, email, username, last_modified) values(?,?,?,?,?,?,now())",
 				identity.UUID,
 				identity.ID,
@@ -322,28 +412,29 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 			sts.identitiesAdded++
 		}
 	}
-	for _, enrollment := range uidentity.Enrollments {
-		rows, err = db.Query(
-			"select uuid from enrollments where uuid = ?",
-			enrollment.UUID,
-		)
+	rows, err = query(
+		db,
+		"select uuid from enrollments where uuid = ?",
+		uidentity.UUID,
+	)
+	fatalOnError(err)
+	fetched = false
+	for rows.Next() {
+		fatalOnError(rows.Scan(&uuid))
+		fetched = true
+	}
+	fatalOnError(rows.Err())
+	fatalOnError(rows.Close())
+	if fetched {
 		fatalOnError(err)
-		fetched = false
-		for rows.Next() {
-			fatalOnError(rows.Scan(&uuid))
-			fetched = true
-		}
-		fatalOnError(rows.Err())
-		fatalOnError(rows.Close())
-		if fetched {
+		sts.enrollmentsFound++
+		if replace {
+			_, err := exec(db, "", "delete from enrollments where uuid = ?", uidentity.UUID)
 			fatalOnError(err)
-			sts.enrollmentsFound++
-			if replace {
-				_, err := db.Exec("delete from enrollments where id = ?", enrollment.UUID)
-				fatalOnError(err)
-				sts.enrollmentsDeleted++
-			}
+			sts.enrollmentsDeleted++
 		}
+	}
+	for _, enrollment := range uidentity.Enrollments {
 		if !fetched || (fetched && replace) {
 			if mtx != nil {
 				mtx.RLock()
@@ -355,7 +446,9 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 			if !ok {
 				fatalf("organization '%s'not found", enrollment.Organization)
 			}
-			_, err := db.Exec(
+			_, err := exec(
+				db,
+				"",
 				"insert into enrollments(uuid, organization_id, start, end) values(?,?,?,?)",
 				enrollment.UUID,
 				compID,
