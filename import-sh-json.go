@@ -19,15 +19,22 @@ type shTime struct {
 	Set bool
 }
 
+// shCountry - country data
+type shCountry struct {
+	Alpha3 string `json:"alpha3"`
+	Code   string `json:"code"`
+	Name   string `json:"name"`
+}
+
 // shProfile - singleprofile data
 type shProfile struct {
-	Country   string `json:"country"`
-	Email     string `json:"email"`
-	Gender    string `json:"gender"`
-	GenderAcc *int   `json:"gender_acc"`
-	IsBot     *bool  `json:"is_bot"`
-	Name      string `json:"name"`
-	UUID      string `json:"uuid"`
+	Country   shCountry `json:"country"`
+	Email     string    `json:"email"`
+	Gender    string    `json:"gender"`
+	GenderAcc *int      `json:"gender_acc"`
+	IsBot     *bool     `json:"is_bot"`
+	Name      string    `json:"name"`
+	UUID      string    `json:"uuid"`
 }
 
 // shIdentity - signgle identity data
@@ -89,6 +96,57 @@ func (sht *shTime) UnmarshalJSON(b []byte) (err error) {
 	return
 }
 
+func addOrganization(db *sql.DB, company string) (int, bool) {
+	_, err := db.Exec("insert into organizations(name) values(?)", company)
+	exists := false
+	if err != nil {
+		if strings.Contains(err.Error(), "Error 1062") {
+			rows, err2 := db.Query("select name from organizations where name = ?", company)
+			fatalOnError(err2)
+			var existingName string
+			for rows.Next() {
+				fatalOnError(rows.Scan(&existingName))
+			}
+			fatalOnError(rows.Err())
+			fatalOnError(rows.Close())
+			exists = true
+		} else {
+			fatalOnError(err)
+		}
+	}
+	rows, err := db.Query("select id from organizations where name = ?", company)
+	fatalOnError(err)
+	var id int
+	fetched := false
+	for rows.Next() {
+		fatalOnError(rows.Scan(&id))
+		fetched = true
+	}
+	fatalOnError(rows.Err())
+	fatalOnError(rows.Close())
+	if !fetched {
+		fatalf("failed to add '%s' company", company)
+	}
+	return id, exists
+}
+
+func addCountry(db *sql.DB, country shCountry) (exists bool) {
+	_, err := db.Exec(
+		"insert into countries(code, alpha3, name) values(?,?,?)",
+		country.Code,
+		country.Alpha3,
+		country.Name,
+	)
+	if err != nil {
+		if strings.Contains(err.Error(), "Error 1062") {
+			exists = true
+		} else {
+			fatalOnError(err)
+		}
+	}
+	return
+}
+
 func importJSONfiles(db *sql.DB, fileNames []string) error {
 	dbg := os.Getenv("DEBUG") != ""
 	replace := os.Getenv("REPLACE") != ""
@@ -96,6 +154,9 @@ func importJSONfiles(db *sql.DB, fileNames []string) error {
 	if dbg {
 		fmt.Printf("Importing %d files, replace mode: %v\n", nFiles, replace)
 	}
+	uidentitiesAry := []map[string]shUIdentity{}
+	orgs := make(map[string]struct{})
+	countries := make(map[string]shCountry)
 	for i, fileName := range fileNames {
 		fmt.Printf("Importing %d/%d: %s\n", i+1, nFiles, fileName)
 		var data shData
@@ -103,10 +164,41 @@ func importJSONfiles(db *sql.DB, fileNames []string) error {
 		fatalOnError(err)
 		fatalOnError(json.Unmarshal(contents, &data))
 		fmt.Printf("%s: %d records\n", fileName, len(data.UIdentities))
-		/*if dbg {
-			fmt.Printf("%+v\n", data.UIdentities)
-		}*/
+		for _, uidentity := range data.UIdentities {
+			for _, enrollment := range uidentity.Enrollments {
+				orgs[enrollment.Organization] = struct{}{}
+			}
+			code := uidentity.Profile.Country.Code
+			if code != "" {
+				_, ok := countries[code]
+				if !ok {
+					countries[code] = uidentity.Profile.Country
+				}
+			}
+		}
+		uidentitiesAry = append(uidentitiesAry, data.UIdentities)
 	}
+	comp2id := make(map[string]int)
+	orgsAdded := 0
+	var exists bool
+	for comp := range orgs {
+		comp2id[comp], exists = addOrganization(db, comp)
+		if !exists {
+			orgsAdded++
+		}
+		if dbg {
+			fmt.Printf("Org '%s' -> %d\n", comp, comp2id[comp])
+		}
+	}
+	fmt.Printf("Number of organizations: %d, added new: %d\n", len(comp2id), orgsAdded)
+	countriesAdded := 0
+	for _, country := range countries {
+		exists = addCountry(db, country)
+		if !exists {
+			countriesAdded++
+		}
+	}
+	fmt.Printf("Number of countries: %d, added new: %d\n", len(countries), countriesAdded)
 	return nil
 }
 
