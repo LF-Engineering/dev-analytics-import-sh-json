@@ -14,6 +14,8 @@ import (
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
+	"golang.org/x/text/transform"
+	"golang.org/x/text/unicode/norm"
 )
 
 // shTime - used to parse non standart time format in Bitergia JSON
@@ -115,7 +117,7 @@ func (sht *shTime) UnmarshalJSON(b []byte) (err error) {
 }
 
 func addOrganization(db *sql.DB, company string) (int, bool) {
-	_, err := db.Exec("insert into organizations(name) values(?)", company)
+	_, err := db.Exec("insert into organizations(name) values(?)", stripUnicodeStr(company))
 	exists := false
 	if err != nil {
 		if strings.Contains(err.Error(), "Error 1062") {
@@ -153,7 +155,7 @@ func addCountry(db *sql.DB, country *shCountry) (exists bool) {
 		"insert into countries(code, alpha3, name) values(?,?,?)",
 		country.Code,
 		country.Alpha3,
-		country.Name,
+		stripUnicodeStr(country.Name),
 	)
 	if err != nil {
 		if strings.Contains(err.Error(), "Error 1062") {
@@ -190,6 +192,28 @@ func getThreadsNum() int {
 	nCPUs = runtime.NumCPU()
 	runtime.GOMAXPROCS(nCPUs)
 	return nCPUs
+}
+
+func stripUnicode(pStr *string) *string {
+	if pStr == nil {
+		return nil
+	}
+	str := *pStr
+	isOk := func(r rune) bool {
+		return r < 32 || r >= 127
+	}
+	t := transform.Chain(norm.NFKD, transform.RemoveFunc(isOk))
+	str, _, _ = transform.String(t, str)
+	return &str
+}
+
+func stripUnicodeStr(str string) string {
+	isOk := func(r rune) bool {
+		return r < 32 || r >= 127
+	}
+	t := transform.Chain(norm.NFKD, transform.RemoveFunc(isOk))
+	str, _, _ = transform.String(t, str)
+	return str
 }
 
 func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity shUIdentity, comp2id map[string]int, replace bool, stats *importStats) {
@@ -248,8 +272,8 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 		_, err := db.Exec(
 			"insert into profiles(uuid, name, email, gender, gender_acc, is_bot, country_code) values(?,?,?,?,?,?,?)",
 			uidentity.UUID,
-			uidentity.Profile.Name,
-			uidentity.Profile.Email,
+			stripUnicode(uidentity.Profile.Name),
+			stripUnicode(uidentity.Profile.Email),
 			uidentity.Profile.Gender,
 			uidentity.Profile.GenderAcc,
 			uidentity.Profile.IsBot,
@@ -260,8 +284,12 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 	}
 	for _, identity := range uidentity.Identities {
 		rows, err = db.Query(
-			"select uuid from identities where id = ?",
+			"select uuid from identities where id = ? or (name = ? and email = ? and username = ? and source = ?)",
 			identity.ID,
+			stripUnicode(identity.Name),
+			stripUnicode(identity.Email),
+			stripUnicode(identity.Username),
+			identity.Source,
 		)
 		fatalOnError(err)
 		fetched = false
@@ -286,9 +314,9 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 				identity.UUID,
 				identity.ID,
 				identity.Source,
-				identity.Name,
-				identity.Email,
-				identity.Username,
+				stripUnicode(identity.Name),
+				stripUnicode(identity.Email),
+				stripUnicode(identity.Username),
 			)
 			fatalOnError(err)
 			sts.identitiesAdded++
