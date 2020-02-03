@@ -75,14 +75,17 @@ type shData struct {
 
 // importStats - statistics about added/updated/deleted objects
 type importStats struct {
-	uidentitiesAdded  int
-	uidentitiesFound  int
-	profilesAdded     int
-	profilesFound     int
-	profilesDeleted   int
-	identitiesAdded   int
-	identitiesFound   int
-	identitiesDeleted int
+	uidentitiesAdded   int
+	uidentitiesFound   int
+	profilesAdded      int
+	profilesFound      int
+	profilesDeleted    int
+	identitiesAdded    int
+	identitiesFound    int
+	identitiesDeleted  int
+	enrollmentsAdded   int
+	enrollmentsFound   int
+	enrollmentsDeleted int
 }
 
 func fatalOnError(err error) {
@@ -291,6 +294,50 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 			sts.identitiesAdded++
 		}
 	}
+	for _, enrollment := range uidentity.Enrollments {
+		rows, err = db.Query(
+			"select uuid from enrollments where uuid = ?",
+			enrollment.UUID,
+		)
+		fatalOnError(err)
+		fetched = false
+		for rows.Next() {
+			fatalOnError(rows.Scan(&uuid))
+			fetched = true
+		}
+		fatalOnError(rows.Err())
+		fatalOnError(rows.Close())
+		if fetched {
+			fatalOnError(err)
+			sts.enrollmentsFound++
+			if replace {
+				_, err := db.Exec("delete from enrollments where id = ?", enrollment.UUID)
+				fatalOnError(err)
+				sts.enrollmentsDeleted++
+			}
+		}
+		if !fetched || (fetched && replace) {
+			if mtx != nil {
+				mtx.RLock()
+			}
+			compID, ok := comp2id[enrollment.Organization]
+			if mtx != nil {
+				mtx.RUnlock()
+			}
+			if !ok {
+				fatalf("organization '%s'not found", enrollment.Organization)
+			}
+			_, err := db.Exec(
+				"insert into enrollments(uuid, organization_id, start, end) values(?,?,?,?)",
+				enrollment.UUID,
+				compID,
+				enrollment.Start.Time,
+				enrollment.End.Time,
+			)
+			fatalOnError(err)
+			sts.enrollmentsAdded++
+		}
+	}
 	if mtx != nil {
 		mtx.Lock()
 	}
@@ -302,6 +349,9 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 	stats.identitiesAdded += sts.identitiesAdded
 	stats.identitiesFound += sts.identitiesFound
 	stats.identitiesDeleted += sts.identitiesDeleted
+	stats.enrollmentsAdded += sts.enrollmentsAdded
+	stats.enrollmentsFound += sts.enrollmentsFound
+	stats.enrollmentsDeleted += sts.enrollmentsDeleted
 	if mtx != nil {
 		mtx.Unlock()
 	}
