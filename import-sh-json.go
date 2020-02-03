@@ -31,13 +31,13 @@ type shCountry struct {
 
 // shProfile - singleprofile data
 type shProfile struct {
-	Country   shCountry `json:"country"`
-	Email     string    `json:"email"`
-	Gender    string    `json:"gender"`
-	GenderAcc *int      `json:"gender_acc"`
-	IsBot     *bool     `json:"is_bot"`
-	Name      string    `json:"name"`
-	UUID      string    `json:"uuid"`
+	Country   *shCountry `json:"country"`
+	Email     *string    `json:"email"`
+	Gender    *string    `json:"gender"`
+	GenderAcc *int       `json:"gender_acc"`
+	IsBot     *bool      `json:"is_bot"`
+	Name      *string    `json:"name"`
+	UUID      string     `json:"uuid"`
 }
 
 // shIdentity - signgle identity data
@@ -71,6 +71,15 @@ type shUIdentity struct {
 // shData - Bitergia's identities export data format
 type shData struct {
 	UIdentities map[string]shUIdentity `json:"uidentities"`
+}
+
+// importStats - statistics about added/updated/deleted objects
+type importStats struct {
+	uidentitiesAdded int
+	uidentitiesFound int
+	profilesAdded    int
+	profilesFound    int
+	profilesDeleted  int
 }
 
 func fatalOnError(err error) {
@@ -133,7 +142,7 @@ func addOrganization(db *sql.DB, company string) (int, bool) {
 	return id, exists
 }
 
-func addCountry(db *sql.DB, country shCountry) (exists bool) {
+func addCountry(db *sql.DB, country *shCountry) (exists bool) {
 	_, err := db.Exec(
 		"insert into countries(code, alpha3, name) values(?,?,?)",
 		country.Code,
@@ -177,12 +186,7 @@ func getThreadsNum() int {
 	return nCPUs
 }
 
-// importStats - statistics about added/updated/deleted objects
-type importStats struct {
-	uidentitiesAdded int
-}
-
-func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity shUIdentity, comp2id map[string]int, stats *importStats) {
+func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity shUIdentity, comp2id map[string]int, replace bool, stats *importStats) {
 	defer func() {
 		if ch != nil {
 			ch <- struct{}{}
@@ -211,6 +215,71 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 		if mtx != nil {
 			mtx.Unlock()
 		}
+	} else {
+		if mtx != nil {
+			mtx.Lock()
+		}
+		stats.uidentitiesFound++
+		if mtx != nil {
+			mtx.Unlock()
+		}
+	}
+	rows, err = db.Query(
+		"select uuid from profiles where uuid = ?",
+		uidentity.UUID,
+	)
+	fatalOnError(err)
+	fetched = false
+	for rows.Next() {
+		fatalOnError(rows.Scan(&uuid))
+		fetched = true
+	}
+	fatalOnError(rows.Err())
+	fatalOnError(rows.Close())
+	if fetched {
+		fatalOnError(err)
+		if mtx != nil {
+			mtx.Lock()
+		}
+		stats.profilesFound++
+		if mtx != nil {
+			mtx.Unlock()
+		}
+		if replace {
+			_, err := db.Exec("delete from profiles where uuid = ?", uidentity.UUID)
+			fatalOnError(err)
+			if mtx != nil {
+				mtx.Lock()
+			}
+			stats.profilesDeleted++
+			if mtx != nil {
+				mtx.Unlock()
+			}
+		}
+	}
+	if !fetched || (fetched && replace) {
+		var cCode *string
+		if uidentity.Profile.Country != nil {
+			cCode = &uidentity.Profile.Country.Name
+		}
+		_, err := db.Exec(
+			"insert into profiles(uuid, name, email, gender, gender_acc, is_bot, country_code) values(?,?,?,?,?,?,?)",
+			uidentity.UUID,
+			uidentity.Profile.Name,
+			uidentity.Profile.Email,
+			uidentity.Profile.Gender,
+			uidentity.Profile.GenderAcc,
+			uidentity.Profile.IsBot,
+			cCode,
+		)
+		fatalOnError(err)
+		if mtx != nil {
+			mtx.Lock()
+		}
+		stats.profilesAdded++
+		if mtx != nil {
+			mtx.Unlock()
+		}
 	}
 }
 
@@ -223,7 +292,7 @@ func importJSONfiles(db *sql.DB, fileNames []string) error {
 	}
 	uidentitiesAry := []map[string]shUIdentity{}
 	orgs := make(map[string]struct{})
-	countries := make(map[string]shCountry)
+	countries := make(map[string]*shCountry)
 	for i, fileName := range fileNames {
 		fmt.Printf("Importing %d/%d: %s\n", i+1, nFiles, fileName)
 		var data shData
@@ -235,8 +304,8 @@ func importJSONfiles(db *sql.DB, fileNames []string) error {
 			for _, enrollment := range uidentity.Enrollments {
 				orgs[enrollment.Organization] = struct{}{}
 			}
-			code := uidentity.Profile.Country.Code
-			if code != "" {
+			if uidentity.Profile.Country != nil {
+				code := uidentity.Profile.Country.Code
 				_, ok := countries[code]
 				if !ok {
 					countries[code] = uidentity.Profile.Country
@@ -277,7 +346,7 @@ func importJSONfiles(db *sql.DB, fileNames []string) error {
 			ch := make(chan struct{})
 			nThreads := 0
 			for _, uidentity := range uidentities {
-				go processUIdentity(ch, mtx, db, uidentity, comp2id, stats)
+				go processUIdentity(ch, mtx, db, uidentity, comp2id, replace, stats)
 				nThreads++
 				if nThreads == thrN {
 					<-ch
@@ -290,7 +359,7 @@ func importJSONfiles(db *sql.DB, fileNames []string) error {
 			}
 		} else {
 			for _, uidentity := range uidentities {
-				processUIdentity(nil, mtx, db, uidentity, comp2id, stats)
+				processUIdentity(nil, mtx, db, uidentity, comp2id, replace, stats)
 			}
 		}
 	}
