@@ -7,14 +7,60 @@ import (
 	"io/ioutil"
 	"os"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
 )
 
+// shTime - used to parse non standart time format in Bitergia JSON
+type shTime struct {
+	time.Time
+	Set bool
+}
+
+// shProfile - singleprofile data
+type shProfile struct {
+	Country   string `json:"country"`
+	Email     string `json:"email"`
+	Gender    string `json:"gender"`
+	GenderAcc *int   `json:"gender_acc"`
+	IsBot     *bool  `json:"is_bot"`
+	Name      string `json:"name"`
+	UUID      string `json:"uuid"`
+}
+
+// shIdentity - signgle identity data
+type shIdentity struct {
+	Email        string `json:"email"`
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Source       string `json:"source"`
+	Username     string `json:"username"`
+	UUID         string `json:"uuid"`
+	LastModified time.Time
+}
+
+// shEnrollment - single company enrollment data
+type shEnrollment struct {
+	UUID         string `json:"uuid"`
+	Organization string `json:"organization"`
+	Start        shTime `json:"start"`
+	End          shTime `json:"end"`
+}
+
+// shUIdentity - single unique identity data
+type shUIdentity struct {
+	UUID         string         `json:"uuid"`
+	Profile      shProfile      `json:"profile"`
+	Identities   []shIdentity   `json:"identities"`
+	Enrollments  []shEnrollment `json:"enrollments"`
+	LastModified time.Time
+}
+
 // shData - Bitergia's identities export data format
 type shData struct {
-	UIdentities interface{} `json:"uidentities"`
+	UIdentities map[string]shUIdentity `json:"uidentities"`
 }
 
 func fatalOnError(err error) {
@@ -30,14 +76,36 @@ func fatalf(f string, a ...interface{}) {
 	fatalOnError(fmt.Errorf(f, a...))
 }
 
+func (sht *shTime) UnmarshalJSON(b []byte) (err error) {
+	s := strings.Trim(string(b), "\"")
+	if s == "null" {
+		return
+	}
+	dtFmt := "2006-01-02T15:04:05"
+	sht.Time, err = time.Parse(dtFmt, s)
+	if err == nil {
+		sht.Set = true
+	}
+	return
+}
+
 func importJSONfiles(db *sql.DB, fileNames []string) error {
+	dbg := os.Getenv("DEBUG") != ""
+	replace := os.Getenv("REPLACE") != ""
 	nFiles := len(fileNames)
+	if dbg {
+		fmt.Printf("Importing %d files, replace mode: %v\n", nFiles, replace)
+	}
 	for i, fileName := range fileNames {
 		fmt.Printf("Importing %d/%d: %s\n", i+1, nFiles, fileName)
 		var data shData
 		contents, err := ioutil.ReadFile(fileName)
 		fatalOnError(err)
 		fatalOnError(json.Unmarshal(contents, &data))
+		fmt.Printf("%s: %d records\n", fileName, len(data.UIdentities))
+		/*if dbg {
+			fmt.Printf("%+v\n", data.UIdentities)
+		}*/
 	}
 	return nil
 }
@@ -95,8 +163,8 @@ func getConnectString(prefix string) string {
 
 func main() {
 	// Connect to MariaDB
-	if len(os.Args) < 3 {
-		fmt.Printf("Arguments required: mail_mapfile org_mapfile\n")
+	if len(os.Args) < 2 {
+		fmt.Printf("Arguments required: file.json [file2.json [...]]\n")
 		return
 	}
 	dtStart := time.Now()
