@@ -42,12 +42,12 @@ type shProfile struct {
 
 // shIdentity - signgle identity data
 type shIdentity struct {
-	Email        string `json:"email"`
-	ID           string `json:"id"`
-	Name         string `json:"name"`
-	Source       string `json:"source"`
-	Username     string `json:"username"`
-	UUID         string `json:"uuid"`
+	Email        *string `json:"email"`
+	ID           string  `json:"id"`
+	Name         *string `json:"name"`
+	Source       string  `json:"source"`
+	Username     *string `json:"username"`
+	UUID         string  `json:"uuid"`
 	LastModified time.Time
 }
 
@@ -75,11 +75,14 @@ type shData struct {
 
 // importStats - statistics about added/updated/deleted objects
 type importStats struct {
-	uidentitiesAdded int
-	uidentitiesFound int
-	profilesAdded    int
-	profilesFound    int
-	profilesDeleted  int
+	uidentitiesAdded  int
+	uidentitiesFound  int
+	profilesAdded     int
+	profilesFound     int
+	profilesDeleted   int
+	identitiesAdded   int
+	identitiesFound   int
+	identitiesDeleted int
 }
 
 func fatalOnError(err error) {
@@ -192,6 +195,7 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 			ch <- struct{}{}
 		}
 	}()
+	var sts importStats
 	rows, err := db.Query("select uuid from uidentities where uuid = ?", uidentity.UUID)
 	fatalOnError(err)
 	uuid := uidentity.UUID
@@ -208,21 +212,9 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 			uidentity.UUID,
 		)
 		fatalOnError(err)
-		if mtx != nil {
-			mtx.Lock()
-		}
-		stats.uidentitiesAdded++
-		if mtx != nil {
-			mtx.Unlock()
-		}
+		sts.uidentitiesAdded++
 	} else {
-		if mtx != nil {
-			mtx.Lock()
-		}
-		stats.uidentitiesFound++
-		if mtx != nil {
-			mtx.Unlock()
-		}
+		sts.uidentitiesFound++
 	}
 	rows, err = db.Query(
 		"select uuid from profiles where uuid = ?",
@@ -238,23 +230,11 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 	fatalOnError(rows.Close())
 	if fetched {
 		fatalOnError(err)
-		if mtx != nil {
-			mtx.Lock()
-		}
-		stats.profilesFound++
-		if mtx != nil {
-			mtx.Unlock()
-		}
+		sts.profilesFound++
 		if replace {
 			_, err := db.Exec("delete from profiles where uuid = ?", uidentity.UUID)
 			fatalOnError(err)
-			if mtx != nil {
-				mtx.Lock()
-			}
-			stats.profilesDeleted++
-			if mtx != nil {
-				mtx.Unlock()
-			}
+			sts.profilesDeleted++
 		}
 	}
 	if !fetched || (fetched && replace) {
@@ -273,13 +253,57 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 			cCode,
 		)
 		fatalOnError(err)
-		if mtx != nil {
-			mtx.Lock()
+		sts.profilesAdded++
+	}
+	for _, identity := range uidentity.Identities {
+		rows, err = db.Query(
+			"select uuid from identities where id = ?",
+			identity.ID,
+		)
+		fatalOnError(err)
+		fetched = false
+		for rows.Next() {
+			fatalOnError(rows.Scan(&uuid))
+			fetched = true
 		}
-		stats.profilesAdded++
-		if mtx != nil {
-			mtx.Unlock()
+		fatalOnError(rows.Err())
+		fatalOnError(rows.Close())
+		if fetched {
+			fatalOnError(err)
+			sts.identitiesFound++
+			if replace {
+				_, err := db.Exec("delete from identities where id = ?", identity.ID)
+				fatalOnError(err)
+				sts.identitiesDeleted++
+			}
 		}
+		if !fetched || (fetched && replace) {
+			_, err := db.Exec(
+				"insert into identities(uuid, id, source, name, email, username, last_modified) values(?,?,?,?,?,?,now())",
+				identity.UUID,
+				identity.ID,
+				identity.Source,
+				identity.Name,
+				identity.Email,
+				identity.Username,
+			)
+			fatalOnError(err)
+			sts.identitiesAdded++
+		}
+	}
+	if mtx != nil {
+		mtx.Lock()
+	}
+	stats.uidentitiesAdded += sts.uidentitiesAdded
+	stats.uidentitiesFound += sts.uidentitiesFound
+	stats.profilesAdded += sts.profilesAdded
+	stats.profilesFound += sts.profilesFound
+	stats.profilesDeleted += sts.profilesDeleted
+	stats.identitiesAdded += sts.identitiesAdded
+	stats.identitiesFound += sts.identitiesFound
+	stats.identitiesDeleted += sts.identitiesDeleted
+	if mtx != nil {
+		mtx.Unlock()
 	}
 }
 
