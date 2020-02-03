@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"runtime"
 	"runtime/debug"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
@@ -147,6 +150,70 @@ func addCountry(db *sql.DB, country shCountry) (exists bool) {
 	return
 }
 
+func getThreadsNum() int {
+	// Use environment variable to have singlethreaded version
+	st := os.Getenv("ST") != ""
+	if st {
+		return 1
+	}
+	nCPUs := 0
+	if os.Getenv("NCPUS") != "" {
+		n, err := strconv.Atoi(os.Getenv("NCPUS"))
+		fatalOnError(err)
+		if n > 0 {
+			nCPUs = n
+		}
+	}
+	if nCPUs > 0 {
+		n := runtime.NumCPU()
+		if nCPUs > n {
+			nCPUs = n
+		}
+		runtime.GOMAXPROCS(nCPUs)
+		return nCPUs
+	}
+	nCPUs = runtime.NumCPU()
+	runtime.GOMAXPROCS(nCPUs)
+	return nCPUs
+}
+
+// importStats - statistics about added/updated/deleted objects
+type importStats struct {
+	uidentitiesAdded int
+}
+
+func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity shUIdentity, comp2id map[string]int, stats *importStats) {
+	defer func() {
+		if ch != nil {
+			ch <- struct{}{}
+		}
+	}()
+	rows, err := db.Query("select uuid from uidentities where uuid = ?", uidentity.UUID)
+	fatalOnError(err)
+	uuid := uidentity.UUID
+	fetched := false
+	for rows.Next() {
+		fatalOnError(rows.Scan(&uuid))
+		fetched = true
+	}
+	fatalOnError(rows.Err())
+	fatalOnError(rows.Close())
+	if !fetched {
+		_, err := db.Exec(
+			"insert into uidentities(uuid, last_modified) values(?,now())",
+			uidentity.UUID,
+		)
+		fatalOnError(err)
+		if mtx != nil {
+			mtx.Lock()
+		}
+		stats.uidentitiesAdded++
+		if mtx != nil {
+			mtx.Unlock()
+		}
+	}
+}
+
 func importJSONfiles(db *sql.DB, fileNames []string) error {
 	dbg := os.Getenv("DEBUG") != ""
 	replace := os.Getenv("REPLACE") != ""
@@ -199,6 +266,35 @@ func importJSONfiles(db *sql.DB, fileNames []string) error {
 		}
 	}
 	fmt.Printf("Number of countries: %d, added new: %d\n", len(countries), countriesAdded)
+	thrN := getThreadsNum()
+	var mtx *sync.RWMutex
+	if thrN > 1 {
+		mtx = &sync.RWMutex{}
+	}
+	stats := &importStats{}
+	for _, uidentities := range uidentitiesAry {
+		if thrN > 1 {
+			ch := make(chan struct{})
+			nThreads := 0
+			for _, uidentity := range uidentities {
+				go processUIdentity(ch, mtx, db, uidentity, comp2id, stats)
+				nThreads++
+				if nThreads == thrN {
+					<-ch
+					nThreads--
+				}
+			}
+			for nThreads > 0 {
+				<-ch
+				nThreads--
+			}
+		} else {
+			for _, uidentity := range uidentities {
+				processUIdentity(nil, mtx, db, uidentity, comp2id, stats)
+			}
+		}
+	}
+	fmt.Printf("Stats:\n%+v\n", stats)
 	return nil
 }
 
