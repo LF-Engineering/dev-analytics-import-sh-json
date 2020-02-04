@@ -41,7 +41,7 @@ type shProfile struct {
 	IsBot       *bool      `json:"is_bot"`
 	Name        *string    `json:"name"`
 	UUID        string     `json:"uuid"`
-	CountryCode string
+	CountryCode *string
 }
 
 // shIdentity - signgle identity data
@@ -83,13 +83,61 @@ type importStats struct {
 	uidentitiesFound   int
 	profilesAdded      int
 	profilesFound      int
+	profilesSame       int
 	profilesDeleted    int
 	identitiesAdded    int
 	identitiesFound    int
+	identitiesSame     int
 	identitiesDeleted  int
 	enrollmentsAdded   int
 	enrollmentsFound   int
+	enrollmentsSame    int
 	enrollmentsDeleted int
+}
+
+func (p shProfile) String() (s string) {
+	/*
+		CountryCode *string
+	*/
+	nils := "(nil)"
+	s = "{UUID:" + p.UUID + ",Name:"
+	if p.Name != nil {
+		s += *p.Name
+	} else {
+		s += nils
+	}
+	s += ",Email:"
+	if p.Email != nil {
+		s += *p.Email
+	} else {
+		s += nils
+	}
+	s += ",Gender:"
+	if p.Gender != nil {
+		s += *p.Gender
+	} else {
+		s += nils
+	}
+	s += ",GenderAcc:"
+	if p.GenderAcc != nil {
+		s += fmt.Sprintf("%d", *p.GenderAcc)
+	} else {
+		s += nils
+	}
+	s += ",IsBot:"
+	if p.IsBot != nil {
+		s += fmt.Sprintf("%v", *p.IsBot)
+	} else {
+		s += nils
+	}
+	s += ",CountryCode:"
+	if p.CountryCode != nil {
+		s += *p.CountryCode
+	} else {
+		s += nils
+	}
+	s += "}"
+	return
 }
 
 func fatalOnError(err error) {
@@ -290,6 +338,41 @@ func truncStringOrNil(strPtr *string, maxLen int) interface{} {
 	return truncToBytes(*strPtr, maxLen)
 }
 
+// profilesDiffer: cmpare two profile with the same uuid
+func profilesDiffer(p1, p2 *shProfile) bool {
+	if p1.Name == nil && p2.Name != nil || p1.Name != nil && p2.Name == nil {
+		return true
+	}
+	if p1.Name != nil && p2.Name != nil && stripUnicodeStr(*p1.Name) != stripUnicodeStr(*p2.Name) {
+		return true
+	}
+	if p1.Email == nil && p2.Email != nil || p1.Email != nil && p2.Email == nil {
+		return true
+	}
+	if p1.Email != nil && p2.Email != nil && stripUnicodeStr(*p1.Email) != stripUnicodeStr(*p2.Email) {
+		return true
+	}
+	if p1.GenderAcc == nil && p2.GenderAcc != nil || p1.GenderAcc != nil && p2.GenderAcc == nil {
+		return true
+	}
+	if p1.GenderAcc != nil && p2.GenderAcc != nil && *p1.GenderAcc != *p2.GenderAcc {
+		return true
+	}
+	if p1.IsBot == nil && p2.IsBot != nil || p1.IsBot != nil && p2.IsBot == nil {
+		return true
+	}
+	if p1.IsBot != nil && p2.IsBot != nil && *p1.IsBot != *p2.IsBot {
+		return true
+	}
+	if p1.CountryCode == nil && p2.CountryCode != nil || p1.CountryCode != nil && p2.CountryCode == nil {
+		return true
+	}
+	if p1.CountryCode != nil && p2.CountryCode != nil && *p1.CountryCode != *p2.CountryCode {
+		return true
+	}
+	return false
+}
+
 func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity shUIdentity, comp2id map[string]int, flags []bool, stats *importStats) {
 	defer func() {
 		if ch != nil {
@@ -349,22 +432,29 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 	}
 	fatalOnError(rows.Err())
 	fatalOnError(rows.Close())
+	if fetched {
+		sts.profilesFound++
+	}
 	same := false
 	if fetched && compare {
 		if uidentity.Profile.Country != nil {
-			uidentity.Profile.CountryCode = uidentity.Profile.Country.Code
+			uidentity.Profile.CountryCode = &uidentity.Profile.Country.Code
+		}
+		same = !profilesDiffer(&uidentity.Profile, &existingProfile)
+		if same {
+			sts.profilesSame++
+		} else if dbg {
+			fmt.Printf("differ: %+v != %+v\n", uidentity.Profile, existingProfile)
 		}
 	}
 	if fetched && !same {
-		fatalOnError(err)
-		sts.profilesFound++
 		if replace {
 			_, err := exec(db, "", "delete from profiles where uuid = ?", uidentity.UUID)
 			fatalOnError(err)
 			sts.profilesDeleted++
 		}
 	}
-	if !fetched || (fetched && replace) {
+	if !same && (!fetched || (fetched && replace)) {
 		var cCode *string
 		if uidentity.Profile.Country != nil {
 			cCode = &uidentity.Profile.Country.Code
@@ -491,11 +581,14 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 	stats.profilesAdded += sts.profilesAdded
 	stats.profilesFound += sts.profilesFound
 	stats.profilesDeleted += sts.profilesDeleted
+	stats.profilesSame += sts.profilesSame
 	stats.identitiesAdded += sts.identitiesAdded
 	stats.identitiesFound += sts.identitiesFound
+	stats.identitiesSame += sts.identitiesSame
 	stats.identitiesDeleted += sts.identitiesDeleted
 	stats.enrollmentsAdded += sts.enrollmentsAdded
 	stats.enrollmentsFound += sts.enrollmentsFound
+	stats.enrollmentsSame += sts.enrollmentsSame
 	stats.enrollmentsDeleted += sts.enrollmentsDeleted
 	if mtx != nil {
 		mtx.Unlock()
