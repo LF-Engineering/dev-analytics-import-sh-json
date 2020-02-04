@@ -9,6 +9,7 @@ Import Bitergia identity export JSONs.
 - If `FULL=1` is specified, SortingHat database will be created from gitignored populated `sortinghat.sql` file instead of an empty structure file `structure.sql`.
 - To drop SortingHat database & user (just an util script): `USR=root PASS=rootpwd SH_USR=shusername SH_DB=shdb ./mariadb_init.sh`.
 - Connect to SortingHat database via: `SH_USR=shusername SH_PASS=shpwd SH_DB=shdb ./mariadb_sortinghat_shell.sh` to test SortingHat database connection.
-- To import data form Bitergia exported JSON files do: `[REPLACE=1] SH_USR=shusername SH_PASS=shpwd SH_DB=shdb SH_PORT=13306 [DEBUG=1] ./import-sh-json file1.json file2.json ...`
+- To import data form Bitergia exported JSON files do: `[REPLACE=1] [COMPARE=1] [DEBUG=1] SH_USR=shusername SH_PASS=shpwd SH_DB=shdb SH_PORT=13306 ./import-sh-json file1.json file2.json ...`
 - If you specify `REPLACE=1` it will overwrite data on conflicts.  Otherwise it will not add data if there is a conflict.
-- Typical usage inside MariaDB K8s pods with all env defined by pod: `REPLACE=1 ./import-sh-json cloudfoundry_sh.json  oci_sh.json  onap_sh.json  opnfv_sh.json  yoctoproject_sh.json`.
+- If you specify `COMPARE=1` it will check if exacty the same data already exists before attempting to ad or replace records.
+- Typical usage inside MariaDB K8s pods with all env defined by pod: `REPLACE=1 COMPARE=1 ./import-sh-json cloudfoundry_sh.json oci_sh.json onap_sh.json opnfv_sh.json yoctoproject_sh.json`.

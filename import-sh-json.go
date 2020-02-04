@@ -34,13 +34,14 @@ type shCountry struct {
 
 // shProfile - singleprofile data
 type shProfile struct {
-	Country   *shCountry `json:"country"`
-	Email     *string    `json:"email"`
-	Gender    *string    `json:"gender"`
-	GenderAcc *int       `json:"gender_acc"`
-	IsBot     *bool      `json:"is_bot"`
-	Name      *string    `json:"name"`
-	UUID      string     `json:"uuid"`
+	Country     *shCountry `json:"country"`
+	Email       *string    `json:"email"`
+	Gender      *string    `json:"gender"`
+	GenderAcc   *int       `json:"gender_acc"`
+	IsBot       *bool      `json:"is_bot"`
+	Name        *string    `json:"name"`
+	UUID        string     `json:"uuid"`
+	CountryCode string
 }
 
 // shIdentity - signgle identity data
@@ -289,16 +290,22 @@ func truncStringOrNil(strPtr *string, maxLen int) interface{} {
 	return truncToBytes(*strPtr, maxLen)
 }
 
-func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity shUIdentity, comp2id map[string]int, replace bool, stats *importStats) {
+func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity shUIdentity, comp2id map[string]int, flags []bool, stats *importStats) {
 	defer func() {
 		if ch != nil {
 			ch <- struct{}{}
 		}
 	}()
 	var sts importStats
+	dbg := flags[0]
+	replace := flags[1]
+	compare := flags[2]
 	rows, err := query(db, "select uuid from uidentities where uuid = ?", uidentity.UUID)
 	fatalOnError(err)
 	uuid := uidentity.UUID
+	if dbg {
+		fmt.Printf("Processing UUID %s\n", uidentity.UUID)
+	}
 	fetched := false
 	for rows.Next() {
 		fatalOnError(rows.Scan(&uuid))
@@ -318,20 +325,37 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 	} else {
 		sts.uidentitiesFound++
 	}
+	var existingProfile shProfile
 	rows, err = query(
 		db,
-		"select uuid from profiles where uuid = ?",
+		"select uuid, name, email, gender, gender_acc, is_bot, country_code from profiles where uuid = ?",
 		uidentity.UUID,
 	)
 	fatalOnError(err)
 	fetched = false
 	for rows.Next() {
-		fatalOnError(rows.Scan(&uuid))
+		fatalOnError(
+			rows.Scan(
+				&existingProfile.UUID,
+				&existingProfile.Name,
+				&existingProfile.Email,
+				&existingProfile.Gender,
+				&existingProfile.GenderAcc,
+				&existingProfile.IsBot,
+				&existingProfile.CountryCode,
+			),
+		)
 		fetched = true
 	}
 	fatalOnError(rows.Err())
 	fatalOnError(rows.Close())
-	if fetched {
+	same := false
+	if fetched && compare {
+		if uidentity.Profile.Country != nil {
+			uidentity.Profile.CountryCode = uidentity.Profile.Country.Code
+		}
+	}
+	if fetched && !same {
 		fatalOnError(err)
 		sts.profilesFound++
 		if replace {
@@ -481,6 +505,7 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 func importJSONfiles(db *sql.DB, fileNames []string) error {
 	dbg := os.Getenv("DEBUG") != ""
 	replace := os.Getenv("REPLACE") != ""
+	compare := os.Getenv("COMPARE") != ""
 	nFiles := len(fileNames)
 	if dbg {
 		fmt.Printf("Importing %d files, replace mode: %v\n", nFiles, replace)
@@ -541,7 +566,7 @@ func importJSONfiles(db *sql.DB, fileNames []string) error {
 			ch := make(chan struct{})
 			nThreads := 0
 			for _, uidentity := range uidentities {
-				go processUIdentity(ch, mtx, db, uidentity, comp2id, replace, stats)
+				go processUIdentity(ch, mtx, db, uidentity, comp2id, []bool{dbg, replace, compare}, stats)
 				nThreads++
 				if nThreads == thrN {
 					<-ch
@@ -554,7 +579,7 @@ func importJSONfiles(db *sql.DB, fileNames []string) error {
 			}
 		} else {
 			for _, uidentity := range uidentities {
-				processUIdentity(nil, mtx, db, uidentity, comp2id, replace, stats)
+				processUIdentity(nil, mtx, db, uidentity, comp2id, []bool{dbg, replace, compare}, stats)
 			}
 		}
 	}
