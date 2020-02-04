@@ -61,6 +61,7 @@ type shEnrollment struct {
 	Organization string `json:"organization"`
 	Start        shTime `json:"start"`
 	End          shTime `json:"end"`
+	OrgID        int
 }
 
 // shUIdentity - single unique identity data
@@ -98,7 +99,7 @@ type importStats struct {
 const nils string = "(nil)"
 const emailStr string = ",Email:"
 
-func (p shProfile) String() (s string) {
+func (p *shProfile) String() (s string) {
 	s = "{UUID:" + p.UUID + ",Name:"
 	if p.Name != nil {
 		s += *p.Name
@@ -139,7 +140,7 @@ func (p shProfile) String() (s string) {
 	return
 }
 
-func (i shIdentity) String() (s string) {
+func (i *shIdentity) String() (s string) {
 	s = "{UUID:" + i.UUID + ",ID:" + i.ID + ",Source:" + i.Source + ",Name:"
 	if i.Name != nil {
 		s += *i.Name
@@ -160,6 +161,14 @@ func (i shIdentity) String() (s string) {
 	}
 	s += "}"
 	return
+}
+
+func (sht *shTime) String() string {
+	return sht.Format("2006-01-02")
+}
+
+func (e *shEnrollment) String() string {
+	return fmt.Sprintf("{UUID:%s,Organization:%s,OrgID:%d,From:%s,End:%s}", e.UUID, e.Organization, e.OrgID, e.Start.String(), e.End.String())
 }
 
 func fatalOnError(err error) {
@@ -360,7 +369,6 @@ func truncStringOrNil(strPtr *string, maxLen int) interface{} {
 	return truncToBytes(*strPtr, maxLen)
 }
 
-// profilesDiffer: cmpare two profile with the same uuid
 func profilesDiffer(p1, p2 *shProfile) bool {
 	if p1.Name == nil && p2.Name != nil || p1.Name != nil && p2.Name == nil {
 		return true
@@ -426,7 +434,31 @@ func identitiesDiffer(i1, i2 *shIdentity) bool {
 	return false
 }
 
-func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity shUIdentity, comp2id map[string]int, flags []bool, stats *importStats) {
+func enrollmentsDiffer(e1, e2 []shEnrollment) bool {
+	m1 := make(map[string]struct{})
+	m2 := make(map[string]struct{})
+	for _, enrollment := range e1 {
+		m1[enrollment.String()] = struct{}{}
+	}
+	for _, enrollment := range e2 {
+		m2[enrollment.String()] = struct{}{}
+	}
+	for k1 := range m1 {
+		_, ok := m2[k1]
+		if !ok {
+			return true
+		}
+	}
+	for k2 := range m2 {
+		_, ok := m1[k2]
+		if !ok {
+			return true
+		}
+	}
+	return false
+}
+
+func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity shUIdentity, comp2id map[string]int, id2comp map[int]string, flags []bool, stats *importStats) {
 	defer func() {
 		if ch != nil {
 			ch <- struct{}{}
@@ -443,6 +475,7 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 	for rows.Next() {
 		fatalOnError(rows.Scan(&uuid))
 		fetched = true
+		break
 	}
 	fatalOnError(rows.Err())
 	fatalOnError(rows.Close())
@@ -479,6 +512,7 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 			),
 		)
 		fetched = true
+		break
 	}
 	fatalOnError(rows.Err())
 	fatalOnError(rows.Close())
@@ -497,17 +531,14 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 			fmt.Printf("Profiles differ: %+v != %+v\n", uidentity.Profile, existingProfile)
 		}
 	}
-	if fetched && !same {
-		if replace {
-			_, err := exec(db, "", "delete from profiles where uuid = ?", uidentity.UUID)
-			fatalOnError(err)
-			sts.profilesDeleted++
-		}
+	if fetched && !same && replace {
+		_, err := exec(db, "", "delete from profiles where uuid = ?", uidentity.UUID)
+		fatalOnError(err)
+		sts.profilesDeleted++
 	}
 	if !same && (!fetched || (fetched && replace)) {
-		var cCode *string
 		if uidentity.Profile.Country != nil {
-			cCode = &uidentity.Profile.Country.Code
+			uidentity.Profile.CountryCode = &uidentity.Profile.Country.Code
 		}
 		_, err := exec(
 			db,
@@ -519,7 +550,7 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 			uidentity.Profile.Gender,
 			uidentity.Profile.GenderAcc,
 			uidentity.Profile.IsBot,
-			truncStringOrNil(cCode, 2),
+			truncStringOrNil(uidentity.Profile.CountryCode, 2),
 		)
 		fatalOnError(err)
 		sts.profilesAdded++
@@ -549,6 +580,7 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 				),
 			)
 			fetched = true
+			break
 		}
 		fatalOnError(rows.Err())
 		fatalOnError(rows.Close())
@@ -564,23 +596,19 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 				fmt.Printf("Identities differ: %+v != %+v\n", identity, existingIdentity)
 			}
 		}
-		if fetched && !same {
+		if fetched && !same && replace {
+			_, err := exec(
+				db,
+				"",
+				"delete from identities where id = ? or (name = ? and email = ? and username = ? and source = ?)",
+				identity.ID,
+				stripUnicode(identity.Name),
+				stripUnicode(identity.Email),
+				stripUnicode(identity.Username),
+				identity.Source,
+			)
 			fatalOnError(err)
-			sts.identitiesFound++
-			if replace {
-				_, err := exec(
-					db,
-					"",
-					"delete from identities where id = ? or (name = ? and email = ? and username = ? and source = ?)",
-					identity.ID,
-					stripUnicode(identity.Name),
-					stripUnicode(identity.Email),
-					stripUnicode(identity.Username),
-					identity.Source,
-				)
-				fatalOnError(err)
-				sts.identitiesDeleted++
-			}
+			sts.identitiesDeleted++
 		}
 		if !same && (!fetched || (fetched && replace)) {
 			_, err := exec(
@@ -598,46 +626,97 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 			sts.identitiesAdded++
 		}
 	}
-	rows, err = query(
-		db,
-		"select uuid from enrollments where uuid = ?",
-		uidentity.UUID,
+	queryStr := ""
+	if compare {
+		queryStr = "select uuid, organization_id, start, end from enrollments where uuid = ?"
+	} else {
+		queryStr = "select uuid from enrollments where uuid = ?"
+	}
+	var (
+		existingEnrollments []shEnrollment
+		existingEnrollment  shEnrollment
 	)
+	rows, err = query(db, queryStr, uidentity.UUID)
 	fatalOnError(err)
 	fetched = false
 	for rows.Next() {
-		fatalOnError(rows.Scan(&uuid))
-		fetched = true
-	}
-	fatalOnError(rows.Err())
-	fatalOnError(rows.Close())
-	if fetched {
-		fatalOnError(err)
-		sts.enrollmentsFound++
-		if replace {
-			_, err := exec(db, "", "delete from enrollments where uuid = ?", uidentity.UUID)
-			fatalOnError(err)
-			sts.enrollmentsDeleted++
-		}
-	}
-	for _, enrollment := range uidentity.Enrollments {
-		if !fetched || (fetched && replace) {
+		if compare {
+			fatalOnError(
+				rows.Scan(
+					&existingEnrollment.UUID,
+					&existingEnrollment.OrgID,
+					&existingEnrollment.Start.Time,
+					&existingEnrollment.End.Time,
+				),
+			)
 			if mtx != nil {
 				mtx.RLock()
 			}
-			compID, ok := comp2id[enrollment.Organization]
+			organization, ok := id2comp[existingEnrollment.OrgID]
 			if mtx != nil {
 				mtx.RUnlock()
 			}
 			if !ok {
-				fatalf("organization '%s'not found", enrollment.Organization)
+				fatalf("organization id %d not found", existingEnrollment.OrgID)
 			}
+			existingEnrollment.Organization = organization
+			existingEnrollments = append(existingEnrollments, existingEnrollment)
+		} else {
+			fatalOnError(rows.Scan(&uuid))
+		}
+		fetched = true
+		if !compare {
+			break
+		}
+	}
+	fatalOnError(rows.Err())
+	fatalOnError(rows.Close())
+	getCompIds := func() {
+		for i, enrollment := range uidentity.Enrollments {
+			if mtx != nil {
+				mtx.RLock()
+			}
+			orgID, ok := comp2id[enrollment.Organization]
+			if mtx != nil {
+				mtx.RUnlock()
+			}
+			if !ok {
+				fatalf("organization '%s' not found", enrollment.Organization)
+			}
+			uidentity.Enrollments[i].OrgID = orgID
+		}
+	}
+	if fetched {
+		sts.enrollmentsFound++
+	}
+	compIDCalculated := false
+	same = false
+	if fetched && compare {
+		getCompIds()
+		compIDCalculated = true
+		same = !enrollmentsDiffer(uidentity.Enrollments, existingEnrollments)
+		if same {
+			sts.enrollmentsSame++
+		} else if dbg {
+			fmt.Printf("Enrollments differ: %+v != %+v\n", uidentity.Enrollments, existingEnrollments)
+		}
+	}
+	if fetched && !same && replace {
+		_, err := exec(db, "", "delete from enrollments where uuid = ?", uidentity.UUID)
+		fatalOnError(err)
+		sts.enrollmentsDeleted++
+	}
+	if !same && (!fetched || (fetched && replace)) {
+		if !compIDCalculated {
+			getCompIds()
+		}
+		for _, enrollment := range uidentity.Enrollments {
 			_, err := exec(
 				db,
 				"",
 				"insert into enrollments(uuid, organization_id, start, end) values(?,?,?,?)",
 				enrollment.UUID,
-				compID,
+				enrollment.OrgID,
 				enrollment.Start.Time,
 				enrollment.End.Time,
 			)
@@ -700,17 +779,35 @@ func importJSONfiles(db *sql.DB, fileNames []string) error {
 		uidentitiesAry = append(uidentitiesAry, data.UIdentities)
 	}
 	comp2id := make(map[string]int)
+	id2comp := make(map[int]string)
+	rows, err := query(db, "select id, name from organizations")
+	fatalOnError(err)
+	orgID := 0
+	orgName := ""
+	for rows.Next() {
+		fatalOnError(rows.Scan(&orgID, &orgName))
+		comp2id[orgName] = orgID
+		id2comp[orgID] = orgName
+	}
+	fatalOnError(rows.Err())
+	fatalOnError(rows.Close())
 	orgsAdded := 0
 	var exists bool
 	for comp := range orgs {
-		comp2id[comp], exists = addOrganization(db, comp)
+		cid, exists := comp2id[comp]
+		if !exists {
+			cid, exists = addOrganization(db, comp)
+			comp2id[comp] = cid
+			id2comp[cid] = comp
+		}
 		if !exists {
 			orgsAdded++
 		}
 		if dbg {
-			fmt.Printf("Org '%s' -> %d\n", comp, comp2id[comp])
+			fmt.Printf("Org '%s' -> %d\n", comp, cid)
 		}
 	}
+	// fmt.Printf("comp2id:%+v\nod2comp:%+v\n", comp2id, id2comp)
 	fmt.Printf("Number of organizations: %d, added new: %d\n", len(comp2id), orgsAdded)
 	countriesAdded := 0
 	for _, country := range countries {
@@ -731,7 +828,7 @@ func importJSONfiles(db *sql.DB, fileNames []string) error {
 			ch := make(chan struct{})
 			nThreads := 0
 			for _, uidentity := range uidentities {
-				go processUIdentity(ch, mtx, db, uidentity, comp2id, []bool{dbg, replace, compare}, stats)
+				go processUIdentity(ch, mtx, db, uidentity, comp2id, id2comp, []bool{dbg, replace, compare}, stats)
 				nThreads++
 				if nThreads == thrN {
 					<-ch
@@ -744,7 +841,7 @@ func importJSONfiles(db *sql.DB, fileNames []string) error {
 			}
 		} else {
 			for _, uidentity := range uidentities {
-				processUIdentity(nil, mtx, db, uidentity, comp2id, []bool{dbg, replace, compare}, stats)
+				processUIdentity(nil, mtx, db, uidentity, comp2id, id2comp, []bool{dbg, replace, compare}, stats)
 			}
 		}
 	}
