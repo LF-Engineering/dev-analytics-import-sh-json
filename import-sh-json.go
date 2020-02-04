@@ -95,18 +95,17 @@ type importStats struct {
 	enrollmentsDeleted int
 }
 
+const nils string = "(nil)"
+const emailStr string = ",Email:"
+
 func (p shProfile) String() (s string) {
-	/*
-		CountryCode *string
-	*/
-	nils := "(nil)"
 	s = "{UUID:" + p.UUID + ",Name:"
 	if p.Name != nil {
 		s += *p.Name
 	} else {
 		s += nils
 	}
-	s += ",Email:"
+	s += emailStr
 	if p.Email != nil {
 		s += *p.Email
 	} else {
@@ -133,6 +132,29 @@ func (p shProfile) String() (s string) {
 	s += ",CountryCode:"
 	if p.CountryCode != nil {
 		s += *p.CountryCode
+	} else {
+		s += nils
+	}
+	s += "}"
+	return
+}
+
+func (i shIdentity) String() (s string) {
+	s = "{UUID:" + i.UUID + ",ID:" + i.ID + ",Source:" + i.Source + ",Name:"
+	if i.Name != nil {
+		s += *i.Name
+	} else {
+		s += nils
+	}
+	s += emailStr
+	if i.Email != nil {
+		s += *i.Email
+	} else {
+		s += nils
+	}
+	s += ",Username:"
+	if i.Username != nil {
+		s += *i.Username
 	} else {
 		s += nils
 	}
@@ -367,7 +389,38 @@ func profilesDiffer(p1, p2 *shProfile) bool {
 	if p1.CountryCode == nil && p2.CountryCode != nil || p1.CountryCode != nil && p2.CountryCode == nil {
 		return true
 	}
-	if p1.CountryCode != nil && p2.CountryCode != nil && *p1.CountryCode != *p2.CountryCode {
+	if p1.CountryCode != nil && p2.CountryCode != nil && truncToBytes(*p1.CountryCode, 2) != truncToBytes(*p2.CountryCode, 2) {
+		return true
+	}
+	return false
+}
+
+func identitiesDiffer(i1, i2 *shIdentity) bool {
+	if i1.UUID != i2.UUID {
+		return true
+	}
+	if i1.ID != i2.ID {
+		return true
+	}
+	if i1.Source != i2.Source {
+		return true
+	}
+	if i1.Name == nil && i2.Name != nil || i1.Name != nil && i2.Name == nil {
+		return true
+	}
+	if i1.Name != nil && i2.Name != nil && stripUnicodeStr(*i1.Name) != stripUnicodeStr(*i2.Name) {
+		return true
+	}
+	if i1.Email == nil && i2.Email != nil || i1.Email != nil && i2.Email == nil {
+		return true
+	}
+	if i1.Email != nil && i2.Email != nil && stripUnicodeStr(*i1.Email) != stripUnicodeStr(*i2.Email) {
+		return true
+	}
+	if i1.Username == nil && i2.Username != nil || i1.Username != nil && i2.Username == nil {
+		return true
+	}
+	if i1.Username != nil && i2.Username != nil && stripUnicodeStr(*i1.Username) != stripUnicodeStr(*i2.Username) {
 		return true
 	}
 	return false
@@ -386,9 +439,6 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 	rows, err := query(db, "select uuid from uidentities where uuid = ?", uidentity.UUID)
 	fatalOnError(err)
 	uuid := uidentity.UUID
-	if dbg {
-		fmt.Printf("Processing UUID %s\n", uidentity.UUID)
-	}
 	fetched := false
 	for rows.Next() {
 		fatalOnError(rows.Scan(&uuid))
@@ -444,7 +494,7 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 		if same {
 			sts.profilesSame++
 		} else if dbg {
-			fmt.Printf("differ: %+v != %+v\n", uidentity.Profile, existingProfile)
+			fmt.Printf("Profiles differ: %+v != %+v\n", uidentity.Profile, existingProfile)
 		}
 	}
 	if fetched && !same {
@@ -475,9 +525,10 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 		sts.profilesAdded++
 	}
 	for _, identity := range uidentity.Identities {
+		var existingIdentity shIdentity
 		rows, err = query(
 			db,
-			"select uuid from identities where id = ? or (name = ? and email = ? and username = ? and source = ?)",
+			"select uuid, id, email, name, source, username from identities where id = ? or (name = ? and email = ? and username = ? and source = ?)",
 			identity.ID,
 			stripUnicode(identity.Name),
 			stripUnicode(identity.Email),
@@ -487,12 +538,33 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 		fatalOnError(err)
 		fetched = false
 		for rows.Next() {
-			fatalOnError(rows.Scan(&uuid))
+			fatalOnError(
+				rows.Scan(
+					&existingIdentity.UUID,
+					&existingIdentity.ID,
+					&existingIdentity.Email,
+					&existingIdentity.Name,
+					&existingIdentity.Source,
+					&existingIdentity.Username,
+				),
+			)
 			fetched = true
 		}
 		fatalOnError(rows.Err())
 		fatalOnError(rows.Close())
 		if fetched {
+			sts.identitiesFound++
+		}
+		same = false
+		if fetched && compare {
+			same = !identitiesDiffer(&identity, &existingIdentity)
+			if same {
+				sts.identitiesSame++
+			} else if dbg {
+				fmt.Printf("Identities differ: %+v != %+v\n", identity, existingIdentity)
+			}
+		}
+		if fetched && !same {
 			fatalOnError(err)
 			sts.identitiesFound++
 			if replace {
@@ -510,7 +582,7 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 				sts.identitiesDeleted++
 			}
 		}
-		if !fetched || (fetched && replace) {
+		if !same && (!fetched || (fetched && replace)) {
 			_, err := exec(
 				db,
 				"",
