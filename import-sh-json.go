@@ -14,10 +14,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/LF-Engineering/ssaw/ssawsync"
 	_ "github.com/go-sql-driver/mysql"
 	"golang.org/x/text/transform"
 	"golang.org/x/text/unicode/norm"
 )
+
+const cOrigin = "bitergia-import-sh-json"
 
 // shTime - used to parse non standart time format in Bitergia JSON
 type shTime struct {
@@ -912,9 +915,15 @@ func main() {
 	db, err := sql.Open("mysql", dsn)
 	fatalOnError(err)
 	defer func() { fatalOnError(db.Close()) }()
-	_, err = db.Exec("set @origin = ?", "bitergia-import-sh-json")
+	_, err = db.Exec("set @origin = ?", cOrigin)
 	fatalOnError(err)
-	fatalOnError(importJSONfiles(db, os.Args[1:len(os.Args)]))
+	err = importJSONfiles(db, os.Args[1:len(os.Args)])
+	// Trigger sync event
+	e := ssawsync.Sync(cOrigin)
+	if e != nil {
+		fmt.Printf("ssaw sync error: %v\n", e)
+	}
+	fatalOnError(err)
 	dtEnd := time.Now()
 	fmt.Printf("Time(%s): %v\n", os.Args[0], dtEnd.Sub(dtStart))
 }
