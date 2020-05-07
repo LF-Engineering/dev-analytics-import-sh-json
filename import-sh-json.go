@@ -912,6 +912,8 @@ func main() {
 	db, err := sql.Open("mysql", dsn)
 	fatalOnError(err)
 	defer func() { fatalOnError(db.Close()) }()
+	_, err = db.Exec("set @origin = ?", "bitergia-import-sh-json")
+	fatalOnError(err)
 	fatalOnError(importJSONfiles(db, os.Args[1:len(os.Args)]))
 	dtEnd := time.Now()
 	fmt.Printf("Time(%s): %v\n", os.Args[0], dtEnd.Sub(dtStart))
