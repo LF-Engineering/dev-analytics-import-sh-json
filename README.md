@@ -14,3 +14,4 @@ Import Bitergia identity export JSONs.
 - If you specify `COMPARE=1` it will check if exacty the same data already exists before attempting to ad or replace records.
 - Typical usage inside MariaDB K8s pods with all env defined by pod: `REPLACE=1 COMPARE=1 ./import-sh-json cloudfoundry_sh.json oci_sh.json onap_sh.json opnfv_sh.json yoctoproject_sh.json`.
 - Typical usage using external SortingHat DB access: `REPLACE=1 COMPARE=1 SH_HOST=xyz.us-abcd-N.elb.amazonaws.com SH_USR="`cat ~/dev/LF-Engineering/darst/mariadb/secrets/USER.secret`" SH_PASS="`cat ~/dev/LF-Engineering/darst/mariadb/secrets/PASS.prod.secret`" SH_DB="`cat ~/dev/LF-Engineering/darst/mariadb/secrets/DB.secret`" ./import-sh-jsona *.json`
+- If using manual `SH_DSN` - remember to add option `parseTime=true`.
