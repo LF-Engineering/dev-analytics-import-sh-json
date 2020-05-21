@@ -170,7 +170,7 @@ CREATE TABLE `enrollments` (
   KEY `organization_id` (`organization_id`),
   CONSTRAINT `enrollments_ibfk_1` FOREIGN KEY (`uuid`) REFERENCES `uidentities` (`uuid`) ON DELETE CASCADE,
   CONSTRAINT `enrollments_ibfk_2` FOREIGN KEY (`organization_id`) REFERENCES `organizations` (`id`) ON DELETE CASCADE
-) ENGINE=InnoDB AUTO_INCREMENT=84843 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_520_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=85687 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_520_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 /*!50003 SET @saved_cs_client      = @@character_set_client */ ;
 /*!50003 SET @saved_cs_results     = @@character_set_results */ ;
@@ -241,9 +241,9 @@ DELIMITER ;;
 for each row begin
   if old.uuid != new.uuid or old.organization_id != new.organization_id or old.start != new.start or old.end != new.end then
     set @origin = coalesce(@origin, 'unknown');
-    insert into sync_uuids(uuid, src, op) values(new.uuid, coalesce(@origin, 'unknown'), 'u');
+    insert into sync_uuids(uuid, src, op) values(new.uuid, @origin, 'u');
     if not(old.uuid <=> new.uuid) then
-      insert into sync_uuids(uuid, src, op) values(old.uuid, coalesce(@origin, 'unknown'), 'u');
+      insert into sync_uuids(uuid, src, op) values(old.uuid, @origin, 'u');
     end if;
   end if;
 end */;;
@@ -380,9 +380,9 @@ DELIMITER ;;
 for each row begin
   if old.source != new.source or not(old.name <=> new.name) or not(old.email <=> new.email) or not(old.username <=> new.username) or not(old.uuid <=> new.uuid) then
     set @origin = coalesce(@origin, 'unknown');
-    insert into sync_uuids(uuid, src, op) values(new.uuid, coalesce(@origin, 'unknown'), 'u');
+    insert into sync_uuids(uuid, src, op) values(new.uuid, @origin, 'u');
     if not(old.uuid <=> new.uuid) then
-      insert into sync_uuids(uuid, src, op) values(old.uuid, coalesce(@origin, 'unknown'), 'u');
+      insert into sync_uuids(uuid, src, op) values(old.uuid, @origin, 'u');
     end if;
   end if;
 end */;;
@@ -456,7 +456,7 @@ CREATE TABLE `organizations` (
   `op` varchar(1) COLLATE utf8mb4_unicode_520_ci DEFAULT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `_name_unique` (`name`)
-) ENGINE=InnoDB AUTO_INCREMENT=38289 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_520_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=38385 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_520_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 /*!50003 SET @saved_cs_client      = @@character_set_client */ ;
 /*!50003 SET @saved_cs_results     = @@character_set_results */ ;
@@ -526,7 +526,7 @@ DELIMITER ;;
 /*!50003 CREATE*/ /*!50017 DEFINER=`root`@`%`*/ /*!50003 trigger organizations_after_update_trigger after update on organizations
 for each row begin
   if old.name != new.name then
-    insert into sync_orgs(name, src, op) values(old.name, old.src, 'd');
+    insert into sync_orgs(name, src, op) values(old.name, coalesce(old.src, 'unknown'), 'd');
     insert into sync_orgs(name, src, op) values(new.name, new.src, 'i');
   end if;
 end */;;
@@ -546,7 +546,7 @@ DELIMITER ;
 DELIMITER ;;
 /*!50003 CREATE*/ /*!50017 DEFINER=`root`@`%`*/ /*!50003 trigger organizations_after_delete_trigger after delete on organizations
 for each row begin
-  insert into sync_orgs(name, src, op) values(old.name, old.src, 'd');
+  insert into sync_orgs(name, src, op) values(old.name, coalesce(old.src, 'unknown'), 'd');
 end */;;
 DELIMITER ;
 /*!50003 SET sql_mode              = @saved_sql_mode */ ;
@@ -665,7 +665,7 @@ DELIMITER ;
 DELIMITER ;;
 /*!50003 CREATE*/ /*!50017 DEFINER=`root`@`%`*/ /*!50003 trigger profiles_after_delete_trigger after delete on profiles
 for each row begin
-  insert into sync_uuids(uuid, src, op) values(old.uuid, old.src, 'd');
+  insert into sync_uuids(uuid, src, op) values(old.uuid, coalesce(old.src, 'unknown'), 'd');
 end */;;
 DELIMITER ;
 /*!50003 SET sql_mode              = @saved_sql_mode */ ;
@@ -707,7 +707,7 @@ CREATE TABLE `sync_orgs` (
   `last_modified` datetime(6) NOT NULL DEFAULT current_timestamp(6),
   PRIMARY KEY (`id`),
   KEY `sync_orgs_name_idx` (`name`)
-) ENGINE=InnoDB AUTO_INCREMENT=27 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_520_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=111 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_520_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -725,7 +725,7 @@ CREATE TABLE `sync_uuids` (
   `last_modified` datetime(6) NOT NULL DEFAULT current_timestamp(6),
   PRIMARY KEY (`id`),
   KEY `sync_uuids_uuid_idx` (`uuid`)
-) ENGINE=InnoDB AUTO_INCREMENT=347 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_520_ci;
+) ENGINE=InnoDB AUTO_INCREMENT=3752241 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_520_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 
 --
@@ -830,7 +830,7 @@ DELIMITER ;
 DELIMITER ;;
 /*!50003 CREATE*/ /*!50017 DEFINER=`root`@`%`*/ /*!50003 trigger uidentities_after_delete_trigger after delete on uidentities
 for each row begin
-  insert into sync_uuids(uuid, src, op) values(old.uuid, old.src, 'd');
+  insert into sync_uuids(uuid, src, op) values(old.uuid, coalesce(old.src, 'unknown'), 'd');
 end */;;
 DELIMITER ;
 /*!50003 SET sql_mode              = @saved_sql_mode */ ;
@@ -861,4 +861,4 @@ CREATE TABLE `uidentities_archive` (
 /*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
 /*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
 
--- Dump completed on 2020-05-08  9:09:41
+-- Dump completed on 2020-05-21  6:01:07
