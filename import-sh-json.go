@@ -631,9 +631,9 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 	}
 	queryStr := ""
 	if compare {
-		queryStr = "select uuid, organization_id, start, end from enrollments where uuid = ?"
+		queryStr = "select uuid, organization_id, start, end from enrollments where uuid = ? and project_slug is null"
 	} else {
-		queryStr = "select uuid from enrollments where uuid = ?"
+		queryStr = "select uuid from enrollments where uuid = ? and project_slug is null"
 	}
 	var (
 		existingEnrollments []shEnrollment
@@ -705,7 +705,7 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 		}
 	}
 	if fetched && !same && replace {
-		_, err := exec(db, "", "delete from enrollments where uuid = ?", uidentity.UUID)
+		_, err := exec(db, "", "delete from enrollments where uuid = ? and project_slug is null", uidentity.UUID)
 		fatalOnError(err)
 		sts.enrollmentsDeleted++
 	}
@@ -717,7 +717,7 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 			_, err := exec(
 				db,
 				"",
-				"insert into enrollments(uuid, organization_id, start, end) values(?,?,?,?)",
+				"insert into enrollments(uuid, organization_id, start, end, project_slug) values(?,?,?,?,null)",
 				enrollment.UUID,
 				enrollment.OrgID,
 				enrollment.Start.Time,
