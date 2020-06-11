@@ -477,6 +477,7 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 			ch <- struct{}{}
 		}
 	}()
+	_, _ = db.Exec("set @origin = ?", cOrigin)
 	var sts importStats
 	dbg := flags[0]
 	replace := flags[1]
