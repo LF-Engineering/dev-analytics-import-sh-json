@@ -22,6 +22,9 @@ import (
 
 const cOrigin = "bitergia-import-sh-json"
 
+// gProjectSlug comes from PROJECT_SLUG env (if set)
+var gProjectSlug *string
+
 // shTime - used to parse non standart time format in Bitergia JSON
 type shTime struct {
 	time.Time
@@ -65,6 +68,7 @@ type shEnrollment struct {
 	Start        shTime `json:"start"`
 	End          shTime `json:"end"`
 	OrgID        int
+	ProjectSlug  *string
 }
 
 // shUIdentity - single unique identity data
@@ -170,8 +174,14 @@ func (sht *shTime) String() string {
 	return sht.Format("2006-01-02")
 }
 
-func (e *shEnrollment) String() string {
-	return fmt.Sprintf("{UUID:%s,Organization:%s,OrgID:%d,From:%s,End:%s}", e.UUID, e.Organization, e.OrgID, e.Start.String(), e.End.String())
+func (e *shEnrollment) String() (s string) {
+	s = fmt.Sprintf("{UUID:%s,Organization:%s,OrgID:%d,From:%s,End:%s,ProjectSlug:", e.UUID, e.Organization, e.OrgID, e.Start.String(), e.End.String())
+	if e.ProjectSlug != nil {
+		s += *e.ProjectSlug + "}"
+	} else {
+		s += nils + "}"
+	}
+	return
 }
 
 func fatalOnError(err error) {
@@ -630,16 +640,25 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 		}
 	}
 	queryStr := ""
-	if compare {
-		queryStr = "select uuid, organization_id, start, end from enrollments where uuid = ? and project_slug is null"
+	if gProjectSlug == nil {
+		if compare {
+			queryStr = "select uuid, organization_id, start, end, project_slug from enrollments where uuid = ? and project_slug is null"
+		} else {
+			queryStr = "select uuid from enrollments where uuid = ? and project_slug is null"
+		}
+		rows, err = query(db, queryStr, uidentity.UUID)
 	} else {
-		queryStr = "select uuid from enrollments where uuid = ? and project_slug is null"
+		if compare {
+			queryStr = "select uuid, organization_id, start, end, project_slug from enrollments where uuid = ? and project_slug = ?"
+		} else {
+			queryStr = "select uuid from enrollments where uuid = ? and project_slug = ?"
+		}
+		rows, err = query(db, queryStr, uidentity.UUID, *gProjectSlug)
 	}
 	var (
 		existingEnrollments []shEnrollment
 		existingEnrollment  shEnrollment
 	)
-	rows, err = query(db, queryStr, uidentity.UUID)
 	fatalOnError(err)
 	fetched = false
 	for rows.Next() {
@@ -650,6 +669,7 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 					&existingEnrollment.OrgID,
 					&existingEnrollment.Start.Time,
 					&existingEnrollment.End.Time,
+					&existingEnrollment.ProjectSlug,
 				),
 			)
 			if mtx != nil {
@@ -705,8 +725,13 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 		}
 	}
 	if fetched && !same && replace {
-		_, err := exec(db, "", "delete from enrollments where uuid = ? and project_slug is null", uidentity.UUID)
-		fatalOnError(err)
+		if gProjectSlug == nil {
+			_, err := exec(db, "", "delete from enrollments where uuid = ? and project_slug is null", uidentity.UUID)
+			fatalOnError(err)
+		} else {
+			_, err := exec(db, "", "delete from enrollments where uuid = ? and project_slug = ?", uidentity.UUID, *gProjectSlug)
+			fatalOnError(err)
+		}
 		sts.enrollmentsDeleted++
 	}
 	if !same && (!fetched || (fetched && replace)) {
@@ -717,11 +742,12 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 			_, err := exec(
 				db,
 				"",
-				"insert into enrollments(uuid, organization_id, start, end, project_slug) values(?,?,?,?,null)",
+				"insert into enrollments(uuid, organization_id, start, end, project_slug) values(?,?,?,?,?)",
 				enrollment.UUID,
 				enrollment.OrgID,
 				enrollment.Start.Time,
 				enrollment.End.Time,
+				gProjectSlug,
 			)
 			fatalOnError(err)
 			sts.enrollmentsAdded++
@@ -751,8 +777,13 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 
 func importJSONfiles(db *sql.DB, fileNames []string) error {
 	dbg := os.Getenv("DEBUG") != ""
+	dry := os.Getenv("DRY") != ""
 	replace := os.Getenv("REPLACE") != ""
 	compare := os.Getenv("COMPARE") != ""
+	projectSlug := os.Getenv("PROJECT_SLUG")
+	if projectSlug != "" {
+		gProjectSlug = &projectSlug
+	}
 	nFiles := len(fileNames)
 	if dbg {
 		fmt.Printf("Importing %d files, replace mode: %v\n", nFiles, replace)
@@ -794,6 +825,10 @@ func importJSONfiles(db *sql.DB, fileNames []string) error {
 	}
 	fatalOnError(rows.Err())
 	fatalOnError(rows.Close())
+	if dry {
+		fmt.Printf("Returing due to dry-run mode\n")
+		return nil
+	}
 	orgsAdded := 0
 	var exists bool
 	for comp := range orgs {
