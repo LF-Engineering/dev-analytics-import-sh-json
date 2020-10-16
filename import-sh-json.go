@@ -14,7 +14,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LF-Engineering/ssaw/ssawsync"
 	_ "github.com/go-sql-driver/mysql"
 	"golang.org/x/text/transform"
 	"golang.org/x/text/unicode/norm"
@@ -955,10 +954,12 @@ func main() {
 	fatalOnError(err)
 	err = importJSONfiles(db, os.Args[1:len(os.Args)])
 	// Trigger sync event
-	e := ssawsync.Sync(cOrigin)
-	if e != nil {
-		fmt.Printf("ssaw sync error: %v\n", e)
-	}
+	/*
+		e := ssawsync.Sync(cOrigin)
+		if e != nil {
+			fmt.Printf("ssaw sync error: %v\n", e)
+		}
+	*/
 	fatalOnError(err)
 	dtEnd := time.Now()
 	fmt.Printf("Time(%s): %v\n", os.Args[0], dtEnd.Sub(dtStart))
