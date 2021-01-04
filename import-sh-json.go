@@ -102,6 +102,7 @@ type importStats struct {
 	enrollmentsFound   int
 	enrollmentsSame    int
 	enrollmentsDeleted int
+	enrollmentsSkipped int
 }
 
 // allmappings - company names mapping from dev-analytics-affiliation
@@ -488,6 +489,7 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 	dbg := flags[0]
 	replace := flags[1]
 	compare := flags[2]
+	orgsRO := flags[3]
 	rows, err := query(db, "select uuid from uidentities where uuid = ?", uidentity.UUID)
 	fatalOnError(err)
 	uuid := uidentity.UUID
@@ -711,7 +713,12 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 				mtx.RUnlock()
 			}
 			if !ok {
-				fatalf("organization '%s' not found", enrollment.Organization)
+				if orgsRO {
+					fmt.Printf("Enrollments: unknown oranization: %s in: %+v\n", enrollment.Organization, uidentity.Enrollments)
+					continue
+				} else {
+					fatalf("organization '%s' not found", enrollment.Organization)
+				}
 			}
 			uidentity.Enrollments[i].OrgID = orgID
 		}
@@ -746,6 +753,10 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 			getCompIds()
 		}
 		for _, enrollment := range uidentity.Enrollments {
+			if orgsRO && enrollment.OrgID <= 0 {
+				sts.enrollmentsSkipped++
+				continue
+			}
 			_, err := exec(
 				db,
 				"",
@@ -777,6 +788,7 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 	stats.enrollmentsFound += sts.enrollmentsFound
 	stats.enrollmentsSame += sts.enrollmentsSame
 	stats.enrollmentsDeleted += sts.enrollmentsDeleted
+	stats.enrollmentsSkipped += sts.enrollmentsSkipped
 	if mtx != nil {
 		mtx.Unlock()
 	}
@@ -1043,10 +1055,6 @@ func importJSONfiles(db *sql.DB, fileNames []string) error {
 		writer.Flush()
 	}
 	fmt.Printf("Number of organizations: %d, added new: %d, missing: %d\n", len(comp2id), orgsAdded, orgsMissing)
-	if 1 == 1 {
-		fmt.Printf("orgs: %d, %d\n", len(orgs), len(comp2id))
-		os.Exit(1)
-	}
 	countriesAdded := 0
 	for _, country := range countries {
 		exists = addCountry(db, country)
@@ -1065,7 +1073,7 @@ func importJSONfiles(db *sql.DB, fileNames []string) error {
 			ch := make(chan struct{})
 			nThreads := 0
 			for _, uidentity := range uidentities {
-				go processUIdentity(ch, mtx, db, uidentity, comp2id, id2comp, []bool{dbg, replace, compare}, stats)
+				go processUIdentity(ch, mtx, db, uidentity, comp2id, id2comp, []bool{dbg, replace, compare, orgsRO}, stats)
 				nThreads++
 				if nThreads == thrN {
 					<-ch
@@ -1078,7 +1086,7 @@ func importJSONfiles(db *sql.DB, fileNames []string) error {
 			}
 		} else {
 			for _, uidentity := range uidentities {
-				processUIdentity(nil, mtx, db, uidentity, comp2id, id2comp, []bool{dbg, replace, compare}, stats)
+				processUIdentity(nil, mtx, db, uidentity, comp2id, id2comp, []bool{dbg, replace, compare, orgsRO}, stats)
 			}
 		}
 	}
