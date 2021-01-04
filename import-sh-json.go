@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -17,6 +18,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"golang.org/x/text/transform"
 	"golang.org/x/text/unicode/norm"
+	"gopkg.in/yaml.v2"
 )
 
 const cOrigin = "bitergia-import-sh-json"
@@ -100,6 +102,11 @@ type importStats struct {
 	enrollmentsFound   int
 	enrollmentsSame    int
 	enrollmentsDeleted int
+}
+
+// allmappings - company names mapping from dev-analytics-affiliation
+type allMappings struct {
+	Mappings [][2]string `yaml:"mappings"`
 }
 
 const nils string = "(nil)"
@@ -784,12 +791,14 @@ func importJSONfiles(db *sql.DB, fileNames []string) error {
 	if projectSlug != "" {
 		gProjectSlug = &projectSlug
 	}
+	orgsRO := os.Getenv("ORGS_RO") != ""
 	nFiles := len(fileNames)
 	if dbg {
 		fmt.Printf("Importing %d files, replace mode: %v\n", nFiles, replace)
 	}
 	uidentitiesAry := []map[string]shUIdentity{}
 	orgs := make(map[string]struct{})
+	missingOrgs := make(map[string]struct{})
 	countries := make(map[string]*shCountry)
 	for i, fileName := range fileNames {
 		fmt.Printf("Importing %d/%d: %s\n", i+1, nFiles, fileName)
@@ -812,16 +821,22 @@ func importJSONfiles(db *sql.DB, fileNames []string) error {
 		}
 		uidentitiesAry = append(uidentitiesAry, data.UIdentities)
 	}
+	fmt.Printf("%d orgs present in import files\n", len(orgs))
 	comp2id := make(map[string]int)
 	id2comp := make(map[int]string)
+	lcomp2id := make(map[string]int)
+	id2lcomp := make(map[int]string)
 	rows, err := query(db, "select id, name from organizations")
 	fatalOnError(err)
 	orgID := 0
 	orgName := ""
 	for rows.Next() {
 		fatalOnError(rows.Scan(&orgID, &orgName))
+		lOrgName := strings.ToLower(orgName)
 		comp2id[orgName] = orgID
 		id2comp[orgID] = orgName
+		lcomp2id[lOrgName] = orgID
+		id2lcomp[orgID] = lOrgName
 	}
 	fatalOnError(rows.Err())
 	fatalOnError(rows.Close())
@@ -830,23 +845,208 @@ func importJSONfiles(db *sql.DB, fileNames []string) error {
 		return nil
 	}
 	orgsAdded := 0
-	var exists bool
-	for comp := range orgs {
-		cid, exists := comp2id[comp]
-		if !exists {
-			cid, exists = addOrganization(db, comp)
-			comp2id[comp] = cid
-			id2comp[cid] = comp
+	orgsMissing := 0
+	var (
+		exists           bool
+		orgNamesMappings allMappings
+	)
+	thrN := getThreadsNum()
+	if orgsRO {
+		mut := &sync.RWMutex{}
+		orgsLoaded := false
+		processOrg := func(ch chan struct{}, comp string) {
+			defer func() {
+				if ch != nil {
+					ch <- struct{}{}
+				}
+			}()
+			mut.RLock()
+			cid, exists := comp2id[comp]
+			mut.RUnlock()
+			if !exists {
+				lComp := strings.ToLower(comp)
+				mut.RLock()
+				_, exists = lcomp2id[lComp]
+				mut.RUnlock()
+				if !exists {
+					mut.RLock()
+					if !orgsLoaded {
+						mut.RUnlock()
+						mut.Lock()
+						orgsMap := os.Getenv("ORGS_MAP_FILE")
+						if orgsMap != "" {
+							var data []byte
+							data, err = ioutil.ReadFile(orgsMap)
+							fatalOnError(err)
+							fatalOnError(yaml.Unmarshal(data, &orgNamesMappings))
+						}
+						orgsLoaded = true
+						mut.Unlock()
+					} else {
+						mut.RUnlock()
+					}
+					if dbg {
+						fmt.Printf("missing '%s'\n", comp)
+					}
+					found := false
+					for _, mapping := range orgNamesMappings.Mappings {
+						re := mapping[0]
+						re = strings.Replace(re, "\\\\", "\\", -1)
+						if dbg {
+							fmt.Printf("check if '%s' matches '%s'\n", comp, re)
+						}
+						// if comp matches re then to is our mapped company name
+						rows, err := query(db, "select ? regexp ?", comp, re)
+						fatalOnError(err)
+						var m int
+						for rows.Next() {
+							fatalOnError(rows.Scan(&m))
+						}
+						fatalOnError(rows.Err())
+						fatalOnError(rows.Close())
+						if m > 0 {
+							if dbg {
+								fmt.Printf("'%s' matches '%s'\n", comp, re)
+							}
+							to := mapping[1]
+							mut.RLock()
+							cid, exists := comp2id[to]
+							mut.RUnlock()
+							if exists {
+								if dbg {
+									fmt.Printf("added mapping '%s' -> '%s' -> %d\n", comp, to, cid)
+								}
+								mut.Lock()
+								comp2id[comp] = cid
+								id2comp[cid] = comp
+								mut.Unlock()
+								found = true
+								break
+							} else {
+								fmt.Printf("'%s' maps to '%s' which cannot be found\n", comp, to)
+							}
+						} else {
+							if dbg {
+								fmt.Printf("'%s' is not matching '%s'\n", comp, re)
+							}
+						}
+					}
+					if found {
+						return
+					}
+					if dbg {
+						fmt.Printf("missing '%s' (trying lower case '%s')\n", comp, lComp)
+					}
+					for _, mapping := range orgNamesMappings.Mappings {
+						re := mapping[0]
+						re = strings.Replace(re, "\\\\", "\\", -1)
+						if dbg {
+							fmt.Printf("check if '%s' matches '%s'\n", lComp, re)
+						}
+						// if lComp matches re then to is our mapped company name
+						rows, err := query(db, "select ? regexp ?", lComp, re)
+						fatalOnError(err)
+						var m int
+						for rows.Next() {
+							fatalOnError(rows.Scan(&m))
+						}
+						fatalOnError(rows.Err())
+						fatalOnError(rows.Close())
+						if m > 0 {
+							if dbg {
+								fmt.Printf("'%s' matches '%s'\n", lComp, re)
+							}
+							to := mapping[1]
+							mut.RLock()
+							cid, exists := lcomp2id[to]
+							mut.RUnlock()
+							if exists {
+								if dbg {
+									fmt.Printf("added mapping '%s' -> '%s' -> %d\n", lComp, to, cid)
+								}
+								mut.Lock()
+								comp2id[comp] = cid
+								id2comp[cid] = comp
+								mut.Unlock()
+								found = true
+								break
+							} else {
+								fmt.Printf("'%s' maps to '%s' which cannot be found\n", lComp, to)
+							}
+						} else {
+							if dbg {
+								fmt.Printf("'%s' is not matching '%s'\n", lComp, re)
+							}
+						}
+					}
+					if !found {
+						fmt.Printf("nothing found for '%s'\n", comp)
+						mut.Lock()
+						orgsMissing++
+						missingOrgs[comp] = struct{}{}
+						mut.Unlock()
+					}
+				} else {
+					mut.Lock()
+					comp2id[comp] = cid
+					id2comp[cid] = comp
+					mut.Unlock()
+				}
+			}
 		}
-		if !exists {
-			orgsAdded++
+		if thrN > 1 {
+			ch := make(chan struct{})
+			nThreads := 0
+			for org := range orgs {
+				go processOrg(ch, org)
+				nThreads++
+				if nThreads == thrN {
+					<-ch
+					nThreads--
+				}
+			}
+			for nThreads > 0 {
+				<-ch
+				nThreads--
+			}
+		} else {
+			for org := range orgs {
+				processOrg(nil, org)
+			}
 		}
-		if dbg {
-			fmt.Printf("Org '%s' -> %d\n", comp, cid)
+	} else {
+		for comp := range orgs {
+			cid, exists := comp2id[comp]
+			if !exists {
+				cid, exists = addOrganization(db, comp)
+				comp2id[comp] = cid
+				id2comp[cid] = comp
+			}
+			if !exists {
+				orgsAdded++
+			}
+			if dbg {
+				fmt.Printf("Org '%s' -> %d\n", comp, cid)
+			}
 		}
 	}
 	// fmt.Printf("comp2id:%+v\nod2comp:%+v\n", comp2id, id2comp)
-	fmt.Printf("Number of organizations: %d, added new: %d\n", len(comp2id), orgsAdded)
+	if len(missingOrgs) > 0 {
+		csvFile, err := os.Create(os.Getenv("MISSING_ORGS_CSV"))
+		fatalOnError(err)
+		defer func() { _ = csvFile.Close() }()
+		writer := csv.NewWriter(csvFile)
+		fatalOnError(writer.Write([]string{"Organization Name"}))
+		for org := range missingOrgs {
+			err = writer.Write([]string{org})
+		}
+		writer.Flush()
+	}
+	fmt.Printf("Number of organizations: %d, added new: %d, missing: %d\n", len(comp2id), orgsAdded, orgsMissing)
+	if 1 == 1 {
+		fmt.Printf("orgs: %d, %d\n", len(orgs), len(comp2id))
+		os.Exit(1)
+	}
 	countriesAdded := 0
 	for _, country := range countries {
 		exists = addCountry(db, country)
@@ -855,7 +1055,6 @@ func importJSONfiles(db *sql.DB, fileNames []string) error {
 		}
 	}
 	fmt.Printf("Number of countries: %d, added new: %d\n", len(countries), countriesAdded)
-	thrN := getThreadsNum()
 	var mtx *sync.RWMutex
 	if thrN > 1 {
 		mtx = &sync.RWMutex{}

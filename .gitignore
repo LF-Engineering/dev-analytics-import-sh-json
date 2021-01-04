@@ -28,3 +28,5 @@ import-sh-json
 # Others
 out
 *.json
+missing.csv
+dump.sql
