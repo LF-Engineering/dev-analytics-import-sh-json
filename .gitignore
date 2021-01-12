@@ -30,3 +30,4 @@ out
 *.json
 missing.csv
 dump.sql
+*.secret
