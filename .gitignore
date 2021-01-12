@@ -28,6 +28,6 @@ import-sh-json
 # Others
 out
 *.json
-missing.csv
+*.csv
 dump.sql
 *.secret
