@@ -721,6 +721,22 @@ func processUIdentity(ch chan struct{}, mtx *sync.RWMutex, db *sql.DB, uidentity
 				}
 			}
 			uidentity.Enrollments[i].OrgID = orgID
+			if mtx != nil {
+				mtx.RLock()
+			}
+			org, ok := id2comp[orgID]
+			if mtx != nil {
+				mtx.RUnlock()
+			}
+			if !ok {
+				continue
+			}
+			if org != enrollment.Organization {
+				if dbg {
+					fmt.Printf("Enrollments updaing org name that would be mapped: '%s' -> '%s'\n", enrollment.Organization, org)
+				}
+				uidentity.Enrollments[i].Organization = org
+			}
 		}
 	}
 	if fetched {
