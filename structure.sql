@@ -109,7 +109,7 @@ CREATE TABLE `enrollments` (
 /*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
 /*!50003 SET sql_mode              = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION' */ ;
 DELIMITER ;;
-/*!50003 CREATE*/ /*!50017 DEFINER=`lfinsights_prod`@`%`*/ /*!50003 trigger enrollments_after_insert_trigger after insert on enrollments
+/*!50003 CREATE*/ /*!50003 trigger enrollments_after_insert_trigger after insert on enrollments
 for each row begin
   insert into changes_cache(ky, value, status) values('enrollment', convert(new.id, char), 'pending') on duplicate key update updated_at = now();
 end */;;
@@ -127,7 +127,7 @@ DELIMITER ;
 /*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
 /*!50003 SET sql_mode              = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION' */ ;
 DELIMITER ;;
-/*!50003 CREATE*/ /*!50017 DEFINER=`lfinsights_prod`@`%`*/ /*!50003 trigger enrollments_after_update_trigger after update on enrollments
+/*!50003 CREATE*/ /*!50003 trigger enrollments_after_update_trigger after update on enrollments
 for each row begin
   if old.uuid != new.uuid or old.organization_id != new.organization_id or old.start != new.start or old.end != new.end then
     insert into changes_cache(ky, value, status) values('enrollment', convert(new.id, char), 'pending') on duplicate key update updated_at = now();
@@ -150,7 +150,7 @@ DELIMITER ;
 /*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
 /*!50003 SET sql_mode              = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION' */ ;
 DELIMITER ;;
-/*!50003 CREATE*/ /*!50017 DEFINER=`lfinsights_prod`@`%`*/ /*!50003 trigger enrollments_after_delete_trigger after delete on enrollments
+/*!50003 CREATE*/ /*!50003 trigger enrollments_after_delete_trigger after delete on enrollments
 for each row begin
   insert into changes_cache(ky, value, status) values('enrollment', convert(old.id, char), 'pending') on duplicate key update updated_at = now();
 end */;;
@@ -219,7 +219,7 @@ CREATE TABLE `identities` (
 /*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
 /*!50003 SET sql_mode              = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION' */ ;
 DELIMITER ;;
-/*!50003 CREATE*/ /*!50017 DEFINER=`lfinsights_prod`@`%`*/ /*!50003 trigger identities_after_insert_trigger after insert on identities
+/*!50003 CREATE*/ /*!50003 trigger identities_after_insert_trigger after insert on identities
 for each row begin
   insert into changes_cache(ky, value, status) values('profile', new.uuid, 'pending') on duplicate key update updated_at = now();
 end */;;
@@ -237,7 +237,7 @@ DELIMITER ;
 /*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
 /*!50003 SET sql_mode              = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION' */ ;
 DELIMITER ;;
-/*!50003 CREATE*/ /*!50017 DEFINER=`lfinsights_prod`@`%`*/ /*!50003 trigger identities_after_update_trigger after update on identities
+/*!50003 CREATE*/ /*!50003 trigger identities_after_update_trigger after update on identities
 for each row begin
   if old.source != new.source or not(old.name <=> new.name) or not(old.email <=> new.email) or not(old.username <=> new.username) or not(old.uuid <=> new.uuid) then
     insert into changes_cache(ky, value, status) values('profile', new.uuid, 'pending') on duplicate key update updated_at = now();
@@ -260,7 +260,7 @@ DELIMITER ;
 /*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
 /*!50003 SET sql_mode              = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION' */ ;
 DELIMITER ;;
-/*!50003 CREATE*/ /*!50017 DEFINER=`lfinsights_prod`@`%`*/ /*!50003 trigger identities_after_delete_trigger after delete on identities
+/*!50003 CREATE*/ /*!50003 trigger identities_after_delete_trigger after delete on identities
 for each row begin
   insert into changes_cache(ky, value, status) values('profile', old.uuid, 'pending') on duplicate key update updated_at = now();
 end */;;
@@ -357,7 +357,7 @@ CREATE TABLE `profiles` (
 /*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
 /*!50003 SET sql_mode              = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION' */ ;
 DELIMITER ;;
-/*!50003 CREATE*/ /*!50017 DEFINER=`lfinsights_prod`@`%`*/ /*!50003 trigger profiles_after_insert_trigger after insert on profiles
+/*!50003 CREATE*/ /*!50003 trigger profiles_after_insert_trigger after insert on profiles
 for each row begin
   insert into changes_cache(ky, value, status) values('profile', new.uuid, 'pending') on duplicate key update updated_at = now();
 end */;;
@@ -375,7 +375,7 @@ DELIMITER ;
 /*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
 /*!50003 SET sql_mode              = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION' */ ;
 DELIMITER ;;
-/*!50003 CREATE*/ /*!50017 DEFINER=`lfinsights_prod`@`%`*/ /*!50003 trigger profiles_after_update_trigger after update on profiles
+/*!50003 CREATE*/ /*!50003 trigger profiles_after_update_trigger after update on profiles
 for each row begin
   if not(old.name <=> new.name) or not(old.email <=> new.email) or not(old.gender <=> new.gender) or not(old.gender_acc <=> new.gender_acc) or not(old.is_bot <=> new.is_bot) or not(old.country_code <=> new.country_code) then 
     insert into changes_cache(ky, value, status) values('profile', new.uuid, 'pending') on duplicate key update updated_at = now();
@@ -395,7 +395,7 @@ DELIMITER ;
 /*!50003 SET @saved_sql_mode       = @@sql_mode */ ;
 /*!50003 SET sql_mode              = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION' */ ;
 DELIMITER ;;
-/*!50003 CREATE*/ /*!50017 DEFINER=`lfinsights_prod`@`%`*/ /*!50003 trigger profiles_after_delete_trigger after delete on profiles
+/*!50003 CREATE*/ /*!50003 trigger profiles_after_delete_trigger after delete on profiles
 for each row begin
   insert into changes_cache(ky, value, status) values('profile', old.uuid, 'pending') on duplicate key update updated_at = now();
 end */;;
