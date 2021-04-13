@@ -437,6 +437,7 @@ CREATE TABLE `slug_mapping` (
   `da_name` varchar(128) NOT NULL,
   `sf_name` varchar(128) NOT NULL,
   `sf_id` varchar(64) NOT NULL,
+  `is_disabled` tinyint(1) DEFAULT NULL
   PRIMARY KEY (`da_name`,`sf_name`,`sf_id`),
   UNIQUE KEY `da_name` (`da_name`),
   UNIQUE KEY `sf_name` (`sf_name`),
